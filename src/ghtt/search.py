@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
-import subprocess
-from functools import wraps
-
 import click
 import github
 import requests
-from typing import List
 
 from .auth import needs_auth
 
 
 def notify(api_key, domain_name, to, repos, query):
-    url = 'https://api.mailgun.net/v3/{}/messages'.format(domain_name)
-    auth = ('api', api_key)
+    url = "https://api.mailgun.net/v3/{}/messages".format(domain_name)
+    auth = ("api", api_key)
 
     text = ""
     for g_repo in repos:
@@ -24,17 +20,17 @@ def notify(api_key, domain_name, to, repos, query):
         text = text + "\n"
 
     data = {
-        'from': 'ghtt <mailgun@{}>'.format(domain_name),
-        'to': to,
-        'subject': "Alert! Repositories found who match query '{}'\n".format(query),
-        'text': text,
+        "from": "ghtt <mailgun@{}>".format(domain_name),
+        "to": to,
+        "subject": "Alert! Repositories found who match query '{}'\n".format(query),
+        "text": text,
     }
 
     response = requests.post(url, auth=auth, data=data)
     response.raise_for_status()
 
 
-def repos_matching(g : github.Github, query) -> List[github.Repository.Repository]:
+def repos_matching(g: github.Github, query) -> list[github.Repository.Repository]:
     repos = list()
     results = g.search_code(query)
     for result in results:
@@ -45,18 +41,11 @@ def repos_matching(g : github.Github, query) -> List[github.Repository.Repositor
 @click.command()
 @click.pass_context
 @click.option(
-    '--query', '-q',
-    help='Query to run. e.g. "Allkit.h in:path" ',
-    required="True")
-@click.option(
-    '--mg-api-key',
-    help='Mailgun api key.')
-@click.option(
-    '--mg-domain',
-    help='Mailgun domain name.')
-@click.option(
-    '--to',
-    help='Email address to send alert to.')
+    "--query", "-q", help='Query to run. e.g. "Allkit.h in:path" ', required="True"
+)
+@click.option("--mg-api-key", help="Mailgun api key.")
+@click.option("--mg-domain", help="Mailgun domain name.")
+@click.option("--to", help="Email address to send alert to.")
 @needs_auth
 def search(ctx, query, mg_api_key, mg_domain, to):
     """Searches repositories matching the query,
@@ -74,7 +63,7 @@ def search(ctx, query, mg_api_key, mg_domain, to):
     click.secho("# Query: '{}'".format(query), fg="green")
     click.secho("# Searching for repositories..", fg="green")
 
-    g : github.Github = ctx.obj['pyg']
+    g: github.Github = ctx.obj["pyg"]
 
     # https://developer.github.com/v3/search/#considerations-for-code-search
     g_repos = repos_matching(g, query)
@@ -88,7 +77,7 @@ def search(ctx, query, mg_api_key, mg_domain, to):
         click.secho("\tAuthor name: {}".format(g_commit.commit.author.name))
         click.secho("\tAuthor email: {}\n".format(g_commit.commit.author.email))
 
-
     if g_repos and mg_api_key and mg_domain and to:
         click.secho("Sending email")
         notify(mg_api_key, mg_domain, to, g_repos, query)
+

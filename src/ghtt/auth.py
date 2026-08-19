@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 from functools import wraps
-import subprocess
 from urllib.parse import urlparse
 
 import click
 import github as pygithub
-import requests
 
 import ghtt.config
+
 
 def authenticate(url, token):
     click.secho("# URL: '{}'".format(url), fg="green")
@@ -26,14 +25,13 @@ def authenticate(url, token):
     url = urlparse(url)
 
     if url.netloc == "github.com":
-        pyg = pygithub.Github(
-            login_or_token=token,
-            password=password)
+        pyg = pygithub.Github(login_or_token=token, password=password)
     else:
         pyg = pygithub.Github(
             base_url="https://{url.netloc}/api/v3".format(url=url),
             login_or_token=token,
-            password=password)
+            password=password,
+        )
 
     return pyg
 
@@ -41,15 +39,17 @@ def authenticate(url, token):
 def needs_auth(f):
     @wraps(f)
     @click.option(
-        '--url', '-u',
-        help='URL to Github instance. Defaults to github.com.',
-        default=lambda: ghtt.config.get('url', "https://github.com"))
-    @click.option(
-        '--token', '-t',
-        help='Github authentication token.')
+        "--url",
+        "-u",
+        help="URL to Github instance. Defaults to github.com.",
+        default=lambda: ghtt.config.get("url", "https://github.com"),
+    )
+    @click.option("--token", "-t", help="Github authentication token.")
     @click.pass_context
     def wrapper(ctx, *args, url=None, token=None, **kwargs):
-        ctx.obj['pyg'] = authenticate(url, token)
-        ctx.obj['url'] = url
+        ctx.obj["pyg"] = authenticate(url, token)
+        ctx.obj["url"] = url
         return f(*args, **kwargs)
+
     return wrapper
+
