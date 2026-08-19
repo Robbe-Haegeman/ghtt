@@ -2,10 +2,10 @@
 
 `ghtt` is a tool to help teachers run projects and exams on GitHub.
 
-* Create individual or group repositories, issues and pull requests from templates.
-* Grant and remove students access to individual or group repositories
-* Download students solutions
-* Integrate with Visual Studio Code to periodically submit solutions during exams.
+- Create individual or group repositories, issues and pull requests from templates.
+- Grant and remove students access to individual or group repositories
+- Download students solutions
+- Integrate with Visual Studio Code to periodically submit solutions during exams.
 
 It works both with GitHub.com and private GitHub Enterprise instances.
 
@@ -13,11 +13,11 @@ It works both with GitHub.com and private GitHub Enterprise instances.
 
 > `ghtt` only runs on Linux and macOS, but Windows users can install [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) to run Ubuntu on Windows.
 
-You can install `ghtt` by downloading the sources and installing it using `pip`.
+You can install `ghtt` by downloading the sources and installing it using `uv`.
 
 ```shell
-git clone git@github.com:IBCNServices/ghtt.git
-python3 -m pip install ./ghtt
+git clone git@github.com:idlab-discover/ghtt.git
+uv tool install ./ghtt
 ```
 
 After this, you can use it on your system!
@@ -28,8 +28,8 @@ After this, you can use it on your system!
 
 `ghtt` _requires two_ forms of authentication.
 
-* SSH keys are used to push and pull from and to repositories. For more information on how to set this up, see [Adding a new SSH key to your GitHub account](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account).
-* To create issues and manage repositories, `ghtt` requires a second form of authentication. The easiest option for authentication is a [GitHub Personal Access Token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token). You then need to supply this token **to each command** using the `--token <token>` flag.
+- SSH keys are used to push and pull from and to repositories. For more information on how to set this up, see [Adding a new SSH key to your GitHub account](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account).
+- To create issues and manage repositories, `ghtt` requires a second form of authentication. The easiest option for authentication is a [GitHub Personal Access Token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token). You then need to supply this token **to each command** using the `--token <token>` flag.
 
   Alternatively, if you do not specify a token, `ghtt` will ask you for your username and password with each command.
 
@@ -41,10 +41,10 @@ This repository includes [a sample project config directory](docs/examples/proje
 
 > Note: this project-config folder includes a git submodule. Run `git submodule update --init --recursive` to download all submodules of this repository before you start.
 
-* `ghtt.yaml` is the main config file for that project. It specifies which GitHub organization to use, the default configuration of the repositories and more.
-* `students.csv` is a CSV file containing the students and (optionally) which groups they're in. The first row of this CSV is expected to contain the column headers. The next rows are the students.
-* `template/` is a GitHub repository that is used as the template for the student repositories.
-* `lab1-assignment.yaml` is an issue template you can use to generate issues.
+- `ghtt.yaml` is the main config file for that project. It specifies which GitHub organization to use, the default configuration of the repositories and more.
+- `students.csv` is a CSV file containing the students and (optionally) which groups they're in. The first row of this CSV is expected to contain the column headers. The next rows are the students.
+- `template/` is a GitHub repository that is used as the template for the student repositories.
+- `lab1-assignment.yaml` is an issue template you can use to generate issues.
 
 Each time you execute the `ghtt` command, it will look for the `ghtt.yaml` file in the _current working directory_. So make sure you `cd` to the project config directory before executing `ghtt`.
 

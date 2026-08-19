@@ -1,0 +1,39 @@
+[project]
+name = "ghtt"
+version = "0.0.1"
+description = "ghtt helps teachers manage courses and exams that use GitHub."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+keywords = ["GitHub"]
+authors = [{ name = "Merlijn Sebrechts", email = "merlijn.sebrechts@ugent.be" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Topic :: Utilities",
+  "Natural Language :: English",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.5",
+  "License :: OSI Approved :: GNU Affero General Public License v3 (AGPLv3)",
+]
+dependencies = [
+  "click>=8.4.2",
+  "jinja2>=3.1.6",
+  "natsort>=8.4.0",
+  "pygithub>=2.9.1",
+  "python-dateutil>=2.9.0.post0",
+  "pyyaml>=6.0.3",
+  "requests>=2.34.2",
+  "tabulate>=0.10.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[project.urls]
+Homepage = "http://packages.python.org/gh-teacher"
+
+[project.scripts]
+ghtt = "ghtt.__main__:cli"
