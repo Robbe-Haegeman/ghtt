@@ -245,8 +245,18 @@ def resolve_settings(options: CommonOptions) -> Settings:
     connection = parse_github_url(url, options.organization)
 
     if not options.token:
+        # Selecting the SSH transport is the moment people expect their SSH key
+        # to be enough, so say plainly that it covers Git but not the API.
+        transport_note = (
+            " --transport ssh uses your SSH key to push and fetch, but creating"
+            " and configuring repositories goes through the GitHub API, which"
+            " needs a token."
+            if config.transport is GitTransport.SSH
+            else ""
+        )
         raise ConfigError(
             "Missing GitHub token. Supply it with --token or set GHTT_TOKEN."
+            + transport_note
         )
 
     return Settings(

@@ -233,8 +233,9 @@ def assignment(
         typer.Option(
             "--transport",
             help=(
-                "Git transport for pushing and fetching. HTTPS uses --token; "
-                "ssh uses your own SSH key. Defaults to https."
+                "Git transport for pushing and fetching. https uses --token; "
+                "ssh uses your own SSH key. A token is required either way, "
+                "because the GitHub API cannot use an SSH key. Defaults to https."
             ),
         ),
     ] = None,

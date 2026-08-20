@@ -56,7 +56,8 @@ run reported an update. Only the day is compared now.
 **HTTPS is the default Git transport.** Pushing and fetching used SSH URLs
 before. They now use HTTPS with your `--token`, so a token is the only thing
 you need to set up. Add `--transport ssh`, or `transport: ssh` in `ghtt.yaml`,
-to keep using your SSH keys.
+to keep using your SSH keys for pushing and fetching. A token is still required
+either way: the GitHub API cannot authenticate with an SSH key.
 
 **Individual repositories no longer receive every mentor.** A mentor belongs to
 the repositories of the groups in their own group list. Individual repositories

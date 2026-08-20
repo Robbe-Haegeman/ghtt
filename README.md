@@ -26,7 +26,9 @@ After this, you can use it on your system!
 
 ### Authentication
 
-`ghtt` authenticates to the GitHub API with a
+**A token is always required.** `ghtt` creates repositories, sets descriptions,
+protects branches, adds collaborators, and opens issues and pull requests
+through the GitHub API, which authenticates with a
 [personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token).
 Give it with `--token`, or put it in the `GHTT_TOKEN` environment variable so
 you do not have to repeat it:
@@ -35,12 +37,13 @@ you do not have to repeat it:
 export GHTT_TOKEN=github_pat_11AAAAAAA0aaaaaaaaaaaa
 ```
 
-The same token is used to push and pull over HTTPS, so a token is all you need.
-It is passed to Git for one command at a time; it is never written into a Git
-remote, a config file, or an error message.
+By default the same token also pushes and fetches over HTTPS, so the token is
+the only thing you have to set up. It is handed to Git one command at a time; it
+is never written into a Git remote, a config file, or an error message.
 
-If you prefer the SSH keys you already have set up, add `--transport ssh` and
-`ghtt` will use them for pushing and fetching. See
+`--transport ssh` makes Git push and fetch with the SSH keys you already have,
+which is useful if your instance or your workflow expects SSH. It changes only
+that: the token is still needed for everything ghtt does through the API. See
 [Adding a new SSH key to your GitHub account](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account).
 
 ### Project configuration

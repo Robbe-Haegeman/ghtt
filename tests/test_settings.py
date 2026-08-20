@@ -162,6 +162,20 @@ def test_a_missing_token_names_the_option_and_the_variable(
         resolve_settings(CommonOptions(organization="algorithms-2026"))
 
 
+def test_ssh_still_needs_a_token_and_says_why(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An SSH key authenticates Git, never the API, and the error must say so."""
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ConfigError, match="goes through the GitHub API") as error:
+        resolve_settings(
+            CommonOptions(organization="algorithms-2026", transport=GitTransport.SSH)
+        )
+
+    assert "--transport ssh" in str(error.value)
+
+
 def test_a_missing_organization_names_both_ways_to_supply_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

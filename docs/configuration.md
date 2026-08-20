@@ -46,8 +46,14 @@ ghtt assignment create-pr --branch lab2 --title "Lab 2" --body "Here is lab 2."
 | --- | --- | --- | --- |
 | `url` | `--url`, `-u` | `https://github.com` | GitHub instance. The legacy form ending in the organization, such as `https://github.example.edu/algorithms-2026`, is still accepted and supplies the organization. |
 | — | `--organization` | from `url` | Organization holding the student repositories. Overrides the organization in a legacy `url`. |
-| — | `--token`, `-t` | — | Personal access token. Can also be given as the `GHTT_TOKEN` environment variable. |
+| — | `--token`, `-t` | — | Personal access token. Can also be given as the `GHTT_TOKEN` environment variable. Always required; see below. |
 | `transport` | `--transport` | `https` | Git transport for pushing and fetching: `https` uses the token, `ssh` uses your own SSH key. |
+
+Every assignment command needs a token, whichever transport you choose.
+Creating repositories, setting descriptions, protecting branches, adding
+collaborators, and opening issues and pull requests all go through the GitHub
+API, and an SSH key cannot authenticate there. `--transport ssh` changes only
+how Git pushes and fetches.
 
 ### Repositories
 
