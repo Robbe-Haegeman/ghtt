@@ -1,0 +1,584 @@
+"""The command line of ghtt.
+
+This module owns every option name, help text, and exit code. It resolves what
+the user typed and hands the result to a workflow function elsewhere; no GitHub
+or Git work happens here.
+
+Building the command tree must stay free of side effects. Typer runs this same
+code to render ``--help``, and help is guaranteed to work without a config file,
+a token, a prompt, or a network connection.
+"""
+
+from __future__ import annotations
+
+import functools
+import json
+from collections.abc import Callable
+from pathlib import Path
+from typing import Annotated
+
+import typer
+
+from .config import config_schema
+from .defaults import DEFAULT_GITHUB_URL
+from .errors import GhttError
+from .git import GitTransport
+from .report import TargetReport
+from .search import mailgun_settings, run_search
+from .settings import CommonOptions
+from .util import branches_to_folders, grep_in
+
+# ==============================================================================
+# Error Handling
+# ==============================================================================
+
+
+def reports_errors[**P, R](command: Callable[P, R]) -> Callable[P, R]:
+    """Turn an expected ghtt failure into a readable message and a failing exit.
+
+    Every command needs this, and a decorator keeps the twelve command bodies
+    free of an identical `try`/`except` block. Anything that is not a
+    :class:`GhttError` keeps its traceback: that means a bug, not a mistake the
+    user can correct.
+    """
+
+    @functools.wraps(command)
+    def wrapper(*arguments: P.args, **keywords: P.kwargs) -> R:
+        try:
+            return command(*arguments, **keywords)
+        except GhttError as error:
+            typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from error
+
+    return wrapper
+
+
+def finish(report: TargetReport) -> None:
+    """Print the closing summary and fail the command if any target failed."""
+    report.summarize()
+    if report.failed:
+        raise typer.Exit(code=1)
+
+
+# ==============================================================================
+# Shared Option Types
+# ==============================================================================
+#
+# Each option is declared once here and reused by every command that accepts it,
+# so a help text or a short alias can never drift between two commands.
+
+ConfigPathOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--config",
+        help="Optional ghtt.yaml file. Loaded only when a command needs a value.",
+    ),
+]
+UrlOption = Annotated[
+    str | None,
+    typer.Option(
+        "--url",
+        "-u",
+        help=(
+            "URL of the GitHub instance. The legacy form that ends in the "
+            "organization, such as https://github.example.edu/my-course, is "
+            "still accepted. Defaults to https://github.com."
+        ),
+    ),
+]
+TokenOption = Annotated[
+    str | None,
+    typer.Option(
+        "--token",
+        "-t",
+        envvar="GHTT_TOKEN",
+        help="GitHub personal access token.",
+        show_envvar=True,
+    ),
+]
+OrganizationOption = Annotated[
+    str | None,
+    typer.Option(
+        "--organization",
+        help="GitHub organization that holds the student repositories.",
+    ),
+]
+SourceOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--source",
+        "-s",
+        help="Local Git repository holding the assignment source code.",
+    ),
+]
+StudentsFilterOption = Annotated[
+    str | None,
+    typer.Option(
+        "--students",
+        help=(
+            "Comma-separated usernames to filter the configured student list. "
+            "This is a filter, not a student list: a repository is selected "
+            "when it matches every filter you supply. Defaults to all students."
+        ),
+    ),
+]
+GroupsFilterOption = Annotated[
+    str | None,
+    typer.Option(
+        "--groups",
+        help=(
+            "Comma-separated group names to filter the configured student list. "
+            "This is a filter, not a group list: a repository is selected when "
+            "it matches every filter you supply. Defaults to all groups."
+        ),
+    ),
+]
+YesOption = Annotated[
+    bool,
+    typer.Option(
+        "--yes",
+        help="Process all selected repositories without asking for each one.",
+    ),
+]
+
+
+# ==============================================================================
+# Command Tree
+# ==============================================================================
+
+app = typer.Typer(
+    help="Manage GitHub-based coursework and exams.",
+    no_args_is_help=True,
+)
+assignment_app = typer.Typer(
+    help=(
+        "Manage student or group repositories.\n\n"
+        "Options shared by all assignment commands are given before the "
+        "subcommand, for example: ghtt assignment --token TOKEN create-repos"
+    ),
+    no_args_is_help=True,
+)
+config_app = typer.Typer(
+    help="Inspect ghtt config support.",
+    no_args_is_help=True,
+)
+util_app = typer.Typer(
+    help="Run local file and Git utilities.",
+    no_args_is_help=True,
+)
+app.add_typer(assignment_app, name="assignment")
+app.add_typer(config_app, name="config")
+app.add_typer(util_app, name="util")
+
+
+@app.callback()
+def cli() -> None:
+    """Run ghtt commands."""
+    # Deliberately empty. Commands load config only once they know they need it,
+    # which is what keeps every nested --help page offline.
+
+
+# ==============================================================================
+# Assignment Options
+# ==============================================================================
+#
+# The assignment group carries the settings that apply to every one of its
+# subcommands. That preserves the legacy `ghtt assignment --token X grant` call
+# style and keeps each subcommand signature down to its own options.
+
+
+@assignment_app.callback()
+def assignment(
+    context: typer.Context,
+    config: ConfigPathOption = None,
+    url: UrlOption = None,
+    token: TokenOption = None,
+    organization: OrganizationOption = None,
+    transport: Annotated[
+        GitTransport | None,
+        typer.Option(
+            "--transport",
+            help=(
+                "Git transport for pushing and fetching. HTTPS uses --token; "
+                "ssh uses your own SSH key. Defaults to https."
+            ),
+        ),
+    ] = None,
+    default_branch: Annotated[
+        str | None,
+        typer.Option(
+            "--default-branch",
+            help=(
+                "Branch used as the initial branch of new repositories and as "
+                "the base branch of pull requests. Defaults to master."
+            ),
+        ),
+    ] = None,
+    enable_repo_delete: Annotated[
+        bool | None,
+        typer.Option(
+            "--enable-repo-delete/--no-enable-repo-delete",
+            help="Second opt-in required by delete-repos.",
+        ),
+    ] = None,
+    expected_group_size: Annotated[
+        int | None,
+        typer.Option(
+            "--expected-group-size",
+            help="Students expected per repository. 0 disables the check.",
+        ),
+    ] = None,
+    expected_mentors_per_group: Annotated[
+        int | None,
+        typer.Option(
+            "--expected-mentors-per-group",
+            help="Mentors expected per repository. 0 disables the check.",
+        ),
+    ] = None,
+    repo_name_template: Annotated[
+        str | None,
+        typer.Option(
+            "--repo-name-template",
+            help=(
+                "Repository name pattern. Supports {organization}, "
+                "{student_username}, and {student_group}."
+            ),
+        ),
+    ] = None,
+    has_issues: Annotated[
+        bool | None,
+        typer.Option(
+            "--has-issues/--no-has-issues", help="Enable issues on new repositories."
+        ),
+    ] = None,
+    has_wiki: Annotated[
+        bool | None,
+        typer.Option(
+            "--has-wiki/--no-has-wiki", help="Enable wikis on new repositories."
+        ),
+    ] = None,
+    require_pull_requests: Annotated[
+        bool | None,
+        typer.Option(
+            "--require-pull-requests/--no-require-pull-requests",
+            help="Require a pull request before merging into a protected branch.",
+        ),
+    ] = None,
+    protect_branch: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--protect-branch",
+            help=(
+                "Additional branch to protect, by exact name. Repeatable. The "
+                "default branch is always protected."
+            ),
+        ),
+    ] = None,
+    students_file: Annotated[
+        Path | None,
+        typer.Option("--students-file", help="CSV file listing the students."),
+    ] = None,
+    student_username_field: Annotated[
+        str | None,
+        typer.Option(
+            "--student-username-field",
+            help="CSV column holding GitHub usernames.",
+        ),
+    ] = None,
+    student_comment_template: Annotated[
+        str | None,
+        typer.Option(
+            "--student-comment-template",
+            help=(
+                "Jinja template for a student's part of the repository "
+                "description, for example \"{{ record['Name'] }}\"."
+            ),
+        ),
+    ] = None,
+    student_group_field: Annotated[
+        str | None,
+        typer.Option(
+            "--student-group-field",
+            help="CSV column holding one group name per student.",
+        ),
+    ] = None,
+    student_groups_field: Annotated[
+        str | None,
+        typer.Option(
+            "--student-groups-field",
+            help=(
+                "CSV column holding a comma-separated list of groups. A student "
+                "joins the repository of every group listed."
+            ),
+        ),
+    ] = None,
+    mentors_file: Annotated[
+        Path | None,
+        typer.Option("--mentors-file", help="CSV file listing the mentors."),
+    ] = None,
+    mentor_username_field: Annotated[
+        str | None,
+        typer.Option("--mentor-username-field", help="Mentor username column."),
+    ] = None,
+    mentor_comment_template: Annotated[
+        str | None,
+        typer.Option(
+            "--mentor-comment-template", help="Jinja template for a mentor description."
+        ),
+    ] = None,
+    mentor_groups_field: Annotated[
+        str | None,
+        typer.Option(
+            "--mentor-groups-field",
+            help="CSV column holding the groups a mentor guides.",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Show the plan and every intended change without performing any.",
+        ),
+    ] = False,
+) -> None:
+    """Manage student or group repositories."""
+    # Only recording what was typed. Reading files or contacting GitHub here
+    # would run during `--help` of every subcommand.
+    context.obj = CommonOptions(
+        config_path=config,
+        url=url,
+        token=token,
+        organization=organization,
+        transport=transport,
+        default_branch=default_branch,
+        enable_repo_delete=enable_repo_delete,
+        expected_group_size=expected_group_size,
+        expected_mentors_per_group=expected_mentors_per_group,
+        repo_name_template=repo_name_template,
+        has_issues=has_issues,
+        has_wiki=has_wiki,
+        require_pull_requests=require_pull_requests,
+        protect_branches=tuple(protect_branch or ()),
+        students_file=students_file,
+        student_username_field=student_username_field,
+        student_comment_template=student_comment_template,
+        student_group_field=student_group_field,
+        student_groups_field=student_groups_field,
+        mentors_file=mentors_file,
+        mentor_username_field=mentor_username_field,
+        mentor_comment_template=mentor_comment_template,
+        mentor_groups_field=mentor_groups_field,
+        dry_run=dry_run,
+    )
+
+
+def options_of(context: typer.Context, source: Path | None = None) -> CommonOptions:
+    """Return the assignment options, letting a subcommand override --source."""
+    options = context.obj
+    if not isinstance(
+        options, CommonOptions
+    ):  # pragma: no cover - Typer always sets it
+        raise GhttError("Assignment options were not initialized.")
+    if source is None:
+        return options
+    return options.model_copy(update={"source": source})
+
+
+# ==============================================================================
+# Assignment Commands
+# ==============================================================================
+#
+# TODO: these subcommands are rewritten in the following steps of this rewrite.
+# They are declared now so that the command tree, and therefore every help page,
+# already matches the interface the finished release must offer.
+
+
+def rewrite_in_progress(command: str) -> None:
+    """Prevent a partial command from being mistaken for a successful operation."""
+    typer.secho(
+        f"The {command} command is not implemented in this rewrite stage.",
+        fg=typer.colors.RED,
+        err=True,
+    )
+    raise typer.Exit(code=2)
+
+
+@assignment_app.command("create-repos")
+def create_repos() -> None:
+    """Create repositories from a source Git repository."""
+    rewrite_in_progress("create-repos")
+
+
+@assignment_app.command("create-pr")
+def create_pr() -> None:
+    """Push a branch and create pull requests."""
+    rewrite_in_progress("create-pr")
+
+
+@assignment_app.command("create-issues")
+def create_issues(
+    path: Annotated[Path, typer.Argument(help="YAML issue-and-milestone template.")],
+) -> None:
+    """Create or update issues and milestones from PATH."""
+    rewrite_in_progress("create-issues")
+
+
+@assignment_app.command()
+def pull() -> None:
+    """Fetch each target repository and report its latest commit."""
+    rewrite_in_progress("pull")
+
+
+@assignment_app.command()
+def grant() -> None:
+    """Give students repository access."""
+    rewrite_in_progress("grant")
+
+
+@assignment_app.command("remove-grant")
+def remove_grant() -> None:
+    """Remove student access and pending invitations."""
+    rewrite_in_progress("remove-grant")
+
+
+@assignment_app.command("delete-repos")
+def delete_repos() -> None:
+    """Permanently delete target repositories after explicit safeguards."""
+    rewrite_in_progress("delete-repos")
+
+
+@assignment_app.command("rename-repo")
+def rename_repo() -> None:
+    """Rename organization repositories selected by a regular expression."""
+    rewrite_in_progress("rename-repo")
+
+
+# ==============================================================================
+# Config Commands
+# ==============================================================================
+
+
+@config_app.command()
+def schema() -> None:
+    """Print the JSON Schema of ghtt.yaml for this ghtt release."""
+    typer.echo(json.dumps(config_schema(), indent=2, sort_keys=True))
+
+
+# ==============================================================================
+# Search
+# ==============================================================================
+
+
+@app.command()
+@reports_errors
+def search(
+    query: Annotated[
+        str,
+        typer.Option(
+            "--query",
+            "-q",
+            help='GitHub code search query, for example "Allkit.h in:path".',
+        ),
+    ],
+    url: UrlOption = None,
+    token: TokenOption = None,
+    mg_api_key: Annotated[
+        str | None, typer.Option("--mg-api-key", help="Mailgun API key.")
+    ] = None,
+    mg_domain: Annotated[
+        str | None, typer.Option("--mg-domain", help="Mailgun domain name.")
+    ] = None,
+    to: Annotated[
+        str | None, typer.Option("--to", help="Email address to send the alert to.")
+    ] = None,
+) -> None:
+    """Search GitHub code and print the last committer of each matching repository.
+
+    For the query syntax see
+    https://docs.github.com/en/search-github/searching-on-github/searching-code
+
+    All three Mailgun options must be given together to send a notification.
+
+    Examples:
+
+      ghtt search -t TOKEN -u github.example.edu -q "Allkit.h in:path"
+
+      ghtt search -t TOKEN -q "Allkit.h in:path" --mg-api-key KEY
+      --mg-domain mg.example.edu --to teacher@example.edu
+    """
+    run_search(
+        url or DEFAULT_GITHUB_URL,
+        token or "",
+        query,
+        mailgun_settings(mg_api_key, mg_domain, to),
+    )
+
+
+# ==============================================================================
+# Utilities
+# ==============================================================================
+
+
+@util_app.command("grep-in")
+@reports_errors
+def grep_in_command(
+    path: Annotated[Path, typer.Argument(help="File to search.")],
+    strings: Annotated[
+        str, typer.Argument(help="Comma-separated strings to search for.")
+    ],
+    no_header: Annotated[
+        bool,
+        typer.Option("--no-header", help="Do not print the first line of the file."),
+    ] = False,
+) -> None:
+    """Print each line of PATH that contains one of the comma-separated STRINGS.
+
+    The first line is treated as a header and always printed, because a matching
+    CSV row is only readable next to its column names. Use --no-header to omit it.
+    """
+    grep_in(path, strings, include_header=not no_header)
+
+
+@util_app.command("branches-to-folders")
+@reports_errors
+def branches_to_folders_command(
+    source: Annotated[Path, typer.Argument(help="Local Git repository to expand.")],
+    at: Annotated[
+        str | None,
+        typer.Option(
+            "--at",
+            "-a",
+            help=(
+                "Check out the newest commit at or before this moment, for "
+                'example "2026-01-31 09:00".'
+            ),
+        ),
+    ] = None,
+    rm_repo: Annotated[
+        bool,
+        typer.Option(
+            "--rm-repo",
+            "-r",
+            help="Keep only the files of each branch, without its .git directory.",
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="List the branches without writing anything."),
+    ] = False,
+) -> None:
+    """Clone every local branch of SOURCE into its own folder in SOURCE.expanded.
+
+    The destination must not exist yet; ghtt never deletes files for you.
+    """
+    finish(branches_to_folders(source, at, rm_repo, dry_run))
+
+
+# ==============================================================================
+# Installed Entry Point
+# ==============================================================================
+
+
+def main() -> None:
+    """Launch the Typer application from the installed console script."""
+    app()

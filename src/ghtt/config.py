@@ -9,8 +9,9 @@ from typing import Annotated, Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-CONFIG_FILENAME = "ghtt.yaml"
-
+from .defaults import CONFIG_FILENAME
+from .errors import GhttError
+from .git import GitTransport
 
 # ==============================================================================
 # Config Shape
@@ -21,7 +22,7 @@ CONFIG_FILENAME = "ghtt.yaml"
 # and lets Pydantic generate the matching JSON Schema without a second format.
 
 
-class ConfigError(Exception):
+class ConfigError(GhttError):
     """A config file cannot safely supply command defaults."""
 
 
@@ -53,9 +54,10 @@ class RepositoryConfig(BaseModel):
     name_template: Annotated[str | None, Field(alias="name-template")] = None
     has_issues: Annotated[bool, Field(alias="has-issues")] = False
     has_wiki: Annotated[bool, Field(alias="has-wiki")] = False
-    require_pull_requests: Annotated[
-        bool, Field(alias="require-pull-requests")
-    ] = False
+    require_pull_requests: Annotated[bool, Field(alias="require-pull-requests")] = False
+    # The default branch is always protected. These are additional branches,
+    # named exactly, that should receive the same protection.
+    protect_branches: Annotated[tuple[str, ...], Field(alias="protect-branches")] = ()
 
 
 class Config(BaseModel):
@@ -65,6 +67,7 @@ class Config(BaseModel):
 
     url: str | None = None
     source: Path | None = None
+    transport: GitTransport = GitTransport.HTTPS
     default_branch: Annotated[str, Field(alias="default-branch")] = "master"
     enable_repo_delete: Annotated[bool, Field(alias="enable-repo-delete")] = False
     expected_group_size: Annotated[int, Field(alias="expected-group-size")] = 0
@@ -170,5 +173,7 @@ def load_config(
 def config_schema() -> dict[str, Any]:
     """Return the release-specific JSON Schema for supported project defaults."""
     schema = Config.model_json_schema(by_alias=True)
-    schema["$id"] = f"https://github.com/idlab-discover/ghtt/schemas/{version('ghtt')}.json"
+    schema["$id"] = (
+        f"https://github.com/idlab-discover/ghtt/schemas/{version('ghtt')}.json"
+    )
     return schema

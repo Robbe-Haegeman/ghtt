@@ -11,13 +11,19 @@ from jinja2 import Environment, StrictUndefined, TemplateError
 from pydantic import BaseModel, ConfigDict
 
 from .config import Config, StudentListConfig
+from .defaults import (
+    GROUP_NAME_TEMPLATE,
+    INDIVIDUAL_NAME_TEMPLATE,
+    NAME_TEMPLATE_PLACEHOLDERS,
+)
+from .errors import GhttError
 
 # ==============================================================================
 # Derived Domain Values
 # ==============================================================================
 
 
-class StudentListError(Exception):
+class StudentListError(GhttError):
     """Student-list data cannot safely be used to choose repository targets."""
 
 
@@ -45,11 +51,17 @@ class RepositoryTarget(BaseModel):
     group: str | None
     students: tuple[Person, ...]
     mentors: tuple[Person, ...]
+    url: str = ""
 
     @property
     def description(self) -> str:
         """Keep descriptions stable so plans and updates do not churn unnecessarily."""
         return ", ".join(person.comment for person in self.students if person.comment)
+
+    @property
+    def comment(self) -> str:
+        """Expose the legacy name that existing ``.jinja`` templates still use."""
+        return self.description
 
 
 # ==============================================================================
@@ -78,9 +90,7 @@ def parse_filter(value: str | None, option: str) -> frozenset[str] | None:
 # ==============================================================================
 
 
-def load_student_list(
-    student_list: StudentListConfig, role: str
-) -> tuple[Person, ...]:
+def load_student_list(student_list: StudentListConfig, role: str) -> tuple[Person, ...]:
     """Load one student or mentor list before target derivation begins."""
     try:
         with student_list.source.open(newline="", encoding="utf-8") as file:
@@ -182,6 +192,7 @@ def build_targets(
     student_filter: frozenset[str] | None = None,
     group_filter: frozenset[str] | None = None,
     repo_name_template: str | None = None,
+    github_url: str = "",
 ) -> tuple[RepositoryTarget, ...]:
     """Build full repositories first, then apply all supplied filter categories."""
     # Stable sorting makes plans, confirmations, and later command output
@@ -197,24 +208,15 @@ def build_targets(
     )
     template = repo_name_template or config.repos.name_template
     if template is None:
-        template = (
-            "{organization}-{student_group}"
-            if grouped
-            else "{organization}-{student_username}"
-        )
+        template = GROUP_NAME_TEMPLATE if grouped else INDIVIDUAL_NAME_TEMPLATE
 
     # Validate the template before creating targets. Its values are also the
     # complete compatibility contract for documented legacy placeholders.
-    template_values = {
-        "organization": organization,
-        "student_username": "",
-        "student_group": "",
-    }
+    template_values = dict.fromkeys(NAME_TEMPLATE_PLACEHOLDERS, "")
+    template_values["organization"] = organization
     try:
         fields = [
-            field
-            for _, field, _, _ in Formatter().parse(template)
-            if field is not None
+            field for _, field, _, _ in Formatter().parse(template) if field is not None
         ]
     except ValueError as error:
         raise StudentListError(
@@ -228,6 +230,9 @@ def build_targets(
 
     # Build complete repositories before filtering. Selecting one person in a
     # group identifies their repository; it must not remove their teammates.
+    def repository_url(name: str) -> str:
+        return f"{github_url}/{organization}/{name}" if github_url else name
+
     targets: list[RepositoryTarget] = []
     if grouped:
         groups = sorted({group for student in students for group in student.groups})
@@ -241,9 +246,12 @@ def build_targets(
                     students=tuple(
                         student for student in students if group in student.groups
                     ),
+                    # A mentor guides the groups their own list names, so an
+                    # individual repository below never receives one.
                     mentors=tuple(
                         mentor for mentor in mentors if group in mentor.groups
                     ),
+                    url=repository_url(name),
                 )
             )
     else:
@@ -257,7 +265,8 @@ def build_targets(
                     organization=organization,
                     group=None,
                     students=(student,),
-                    mentors=mentors,
+                    mentors=(),
+                    url=repository_url(name),
                 )
             )
 

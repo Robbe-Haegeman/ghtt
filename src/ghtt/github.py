@@ -5,14 +5,20 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from github import Auth, Github, GithubException
+from github.Organization import Organization
+from github.Repository import Repository
 from pydantic import BaseModel, ConfigDict
+
+from .defaults import ENTERPRISE_API_PATH, GITHUB_COM_HOSTNAME
+from .errors import GhttError
+from .git import GitTransport
 
 # ==============================================================================
 # Connection Values
 # ==============================================================================
 
 
-class GitHubError(Exception):
+class GitHubError(GhttError):
     """A GitHub request cannot complete the requested action."""
 
 
@@ -22,7 +28,12 @@ class GitHubConnection(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     api_url: str | None
+    git_url: str
     organization: str
+
+    def repository_url(self, name: str) -> str:
+        """Return the browser URL of an organization repository."""
+        return f"{self.git_url}/{self.organization}/{name}"
 
 
 # ==============================================================================
@@ -30,8 +41,16 @@ class GitHubConnection(BaseModel):
 # ==============================================================================
 
 
-def parse_github_url(url: str, organization: str | None = None) -> GitHubConnection:
-    """Accept a GitHub host URL and the legacy form that includes an organization."""
+def parse_github_url(
+    url: str,
+    organization: str | None = None,
+    require_organization: bool = True,
+) -> GitHubConnection:
+    """Accept a GitHub host URL and the legacy form that includes an organization.
+
+    ``search`` spans all of GitHub and therefore needs only the host, which is
+    why an organization can be optional.
+    """
     normalized_url = url if "://" in url else f"https://{url}"
     parsed = urlparse(normalized_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -40,7 +59,7 @@ def parse_github_url(url: str, organization: str | None = None) -> GitHubConnect
     path_parts = [part for part in parsed.path.split("/") if part]
     legacy_organization = path_parts[0] if path_parts else None
     target_organization = organization or legacy_organization
-    if not target_organization:
+    if not target_organization and require_organization:
         raise GitHubError(
             "Missing organization. Supply --organization or use a legacy --url "
             "that includes the organization path."
@@ -53,9 +72,13 @@ def parse_github_url(url: str, organization: str | None = None) -> GitHubConnect
     # PyGithub uses its own GitHub.com default. Enterprise API calls require
     # the API v3 endpoint but retain the host and scheme the user selected.
     api_url = None
-    if parsed.hostname != "github.com":
-        api_url = f"{parsed.scheme}://{parsed.netloc}/api/v3"
-    return GitHubConnection(api_url=api_url, organization=target_organization)
+    if parsed.hostname != GITHUB_COM_HOSTNAME:
+        api_url = f"{parsed.scheme}://{parsed.netloc}{ENTERPRISE_API_PATH}"
+    return GitHubConnection(
+        api_url=api_url,
+        git_url=f"{parsed.scheme}://{parsed.netloc}",
+        organization=target_organization or "",
+    )
 
 
 # ==============================================================================
@@ -92,3 +115,41 @@ def explain_github_error(
             f"Cannot {action} {target}: it was not found or the token cannot access it."
         )
     return GitHubError(f"Cannot {action} {target}: GitHub returned {error.status}.")
+
+
+# ==============================================================================
+# Organization Data
+# ==============================================================================
+
+
+def load_organization(client: Github, organization: str) -> Organization:
+    """Look the organization up once so every later step can reuse it."""
+    try:
+        return client.get_organization(organization)
+    except GithubException as error:
+        raise explain_github_error(
+            error, "access organization", organization
+        ) from error
+
+
+def load_repositories(organization: Organization) -> dict[str, Repository]:
+    """Index every organization repository by its lower-cased name.
+
+    One paginated listing replaces a per-target lookup, which turns a run over a
+    hundred student repositories into a couple of requests instead of a hundred.
+    GitHub treats repository names case-insensitively, so the index does too.
+    """
+    try:
+        repositories = list(organization.get_repos("all"))
+    except GithubException as error:
+        raise explain_github_error(
+            error, "list repositories in", organization.login
+        ) from error
+    return {repository.name.lower(): repository for repository in repositories}
+
+
+def clone_url_for(repository: Repository, transport: GitTransport) -> str:
+    """Choose the clone URL that matches the selected Git transport."""
+    if transport is GitTransport.SSH:
+        return repository.ssh_url
+    return repository.clone_url
