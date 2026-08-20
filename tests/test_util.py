@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,6 +10,8 @@ from typer.testing import CliRunner
 from ghtt.cli import app
 from ghtt.errors import GhttError
 from ghtt.util import UtilityError, branches_to_folders, grep_in
+
+from .local_git import make_repository
 
 runner = CliRunner()
 
@@ -70,28 +71,6 @@ def test_grep_in_exits_nonzero_with_a_message_instead_of_a_traceback(
 # ==============================================================================
 # branches-to-folders
 # ==============================================================================
-
-
-def make_repository(path: Path, branches: tuple[str, ...]) -> Path:
-    """Create a small local repository with one file per branch."""
-    path.mkdir()
-
-    def run(*arguments: str) -> None:
-        subprocess.run(["git", *arguments], cwd=path, check=True, capture_output=True)
-
-    run("init", "--initial-branch", "master")
-    run("config", "user.email", "teacher@example.edu")
-    run("config", "user.name", "Teacher")
-    (path / "README.md").write_text("start\n", encoding="utf-8")
-    run("add", "-A")
-    run("commit", "-m", "start")
-    for branch in branches:
-        run("checkout", "-b", branch)
-        (path / f"{branch}.txt").write_text(branch, encoding="utf-8")
-        run("add", "-A")
-        run("commit", "-m", f"work on {branch}")
-        run("checkout", "master")
-    return path
 
 
 def test_branches_to_folders_expands_every_branch(tmp_path: Path) -> None:

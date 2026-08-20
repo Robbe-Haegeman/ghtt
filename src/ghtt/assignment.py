@@ -7,6 +7,7 @@ which of them already exist on GitHub. This module answers them once.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -16,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, SkipValidation
 from tabulate import tabulate
 
 from .config import ConfigError
+from .git import require_git_repository
 from .github import connect_github, load_organization, load_repositories
 from .prompt import Confirmer
 from .settings import Settings
@@ -119,6 +121,23 @@ def prepare_assignment(
         repositories=repositories,
         targets=targets,
     )
+
+
+def require_source(settings: Settings) -> Path:
+    """Return the source repository, checking that it is one before anything runs.
+
+    ``create-repos``, ``create-pr``, and ``pull`` all work from a local Git
+    repository, and all three must fail before they touch GitHub if it is
+    missing or is an ordinary directory.
+    """
+    source = settings.config.source
+    if source is None:
+        raise ConfigError(
+            "Missing source repository. Supply it with --source or set 'source' "
+            "in the config file."
+        )
+    require_git_repository(source)
+    return source
 
 
 def show_plan(targets: tuple[RepositoryTarget, ...]) -> None:

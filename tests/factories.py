@@ -6,6 +6,7 @@ about one command's behaviour is not also a test of config precedence.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import cast
 
 from github.Organization import Organization
@@ -61,9 +62,14 @@ def make_context(
     targets: tuple[RepositoryTarget, ...],
     repositories: tuple[FakeRepository, ...] = (),
     settings: Settings | None = None,
+    local_root: Path | None = None,
 ) -> AssignmentContext:
-    """Build the context a command receives once preparation has succeeded."""
-    organization = FakeOrganization(ORGANIZATION, list(repositories))
+    """Build the context a command receives once preparation has succeeded.
+
+    ``local_root`` backs every repository the organization creates with a real
+    bare repository, so a test can inspect what was actually pushed.
+    """
+    organization = FakeOrganization(ORGANIZATION, list(repositories), local_root)
     return AssignmentContext(
         settings=settings or make_settings(),
         organization=cast(Organization, organization),
@@ -73,3 +79,9 @@ def make_context(
         ),
         targets=targets,
     )
+
+
+def recorded_organization(context: AssignmentContext) -> FakeOrganization:
+    """Read the recording organization back out of a context built above."""
+    assert isinstance(context.organization, FakeOrganization)
+    return context.organization

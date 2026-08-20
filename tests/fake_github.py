@@ -7,6 +7,7 @@ it already has. No test in this suite contacts GitHub.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from github import GithubException
@@ -54,6 +55,7 @@ class FakeRepository:
         self.default_branch = default_branch
         self.description: str | None = None
         self.deleted = False
+        self.local_path: Path | None = None
         self.branches = {
             default_branch: FakeBranch(default_branch, FakeCommit(*author))
         }
@@ -65,6 +67,15 @@ class FakeRepository:
         self.pulls: list[FakePullRequest] = []
         self.edits: list[dict[str, Any]] = []
         self.request_count = 0
+
+    def back_with_local_repository(self, path: Path) -> None:
+        """Point the clone URLs at a real bare repository that Git can push to."""
+        from .local_git import make_bare_repository
+
+        make_bare_repository(path)
+        self.local_path = path
+        self.clone_url = str(path)
+        self.ssh_url = str(path)
 
     # --- reads -------------------------------------------------------------
 
@@ -136,9 +147,11 @@ class FakeRepository:
         assignees: Any = None,
     ) -> FakeIssue:
         self.request_count += 1
-        issue = FakeIssue(
-            title, body, milestone, list(labels or []), list(assignees or [])
-        )
+        wanted = list(assignees or [])
+        # GitHub refuses the whole issue when an assignee cannot be assigned.
+        if any(login.startswith("unknown") for login in wanted):
+            raise GithubException(422, "Validation Failed", {})
+        issue = FakeIssue(title, body, milestone, list(labels or []), wanted)
         self.issues.append(issue)
         return issue
 
@@ -232,13 +245,19 @@ class FakeBranchReference:
 
 class FakeOrganization:
     def __init__(
-        self, login: str, repositories: list[FakeRepository] | None = None
+        self,
+        login: str,
+        repositories: list[FakeRepository] | None = None,
+        local_root: Path | None = None,
     ) -> None:
         self.login = login
         self.html_url = f"https://github.example.edu/{login}"
         self.repositories = list(repositories or [])
         self.listings = 0
         self.created: list[dict[str, Any]] = []
+        # When a test sets local_root, a created repository is backed by a real
+        # bare repository on disk so a push can be inspected afterwards.
+        self.local_root = local_root
 
     def get_repos(self, type: str = "all") -> list[FakeRepository]:
         self.listings += 1
@@ -247,6 +266,8 @@ class FakeOrganization:
     def create_repo(self, name: str, **arguments: Any) -> FakeRepository:
         self.created.append({"name": name, **arguments})
         repository = FakeRepository(name, organization=self.login)
+        if self.local_root is not None:
+            repository.back_with_local_repository(self.local_root / name)
         self.repositories.append(repository)
         return repository
 

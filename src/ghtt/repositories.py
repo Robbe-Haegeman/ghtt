@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import re
+import tempfile
+from pathlib import Path
 
 import typer
 from github import GithubException
+from github.Repository import Repository
 
-from .assignment import AssignmentContext
+from .assignment import AssignmentContext, require_source
 from .errors import GhttError
+from .git import GitError, clone_branch, commit_all, list_local_branches, push_branch
 from .github import (
+    clone_url_for,
     connect_github,
     explain_github_error,
     load_organization,
@@ -18,6 +23,197 @@ from .github import (
 from .prompt import Confirmer
 from .report import TargetReport
 from .settings import Settings
+from .student_list import RepositoryTarget
+from .templates import render_tree
+
+# ==============================================================================
+# create-repos
+# ==============================================================================
+
+
+class BranchProtectionError(GhttError):
+    """A requested branch protection cannot be applied by ghtt."""
+
+
+def validate_protected_branches(patterns: tuple[str, ...]) -> None:
+    """Reject protection patterns ghtt cannot honour, before anything is created.
+
+    GitHub's branch protection API addresses one existing branch by its exact
+    name. A wildcard pattern needs a repository ruleset instead, which ghtt does
+    not manage. Refusing wildcards up front is what stops a run from reporting
+    success while a branch is in fact left unprotected.
+    """
+    # TODO: apply wildcard patterns through the repository rulesets API once
+    # PyGithub exposes it.
+    for pattern in patterns:
+        if any(character in pattern for character in "*?["):
+            raise BranchProtectionError(
+                f"Branch protection pattern {pattern!r} contains a wildcard. "
+                "ghtt protects branches by exact name; wildcard patterns require "
+                "GitHub repository rulesets, which ghtt cannot configure yet."
+            )
+
+
+def protect_branches(
+    repository: Repository, branches: tuple[str, ...], require_pull_requests: bool
+) -> tuple[str, ...]:
+    """Protect each named branch and report the ones that could not be protected."""
+    unprotected: list[str] = []
+    for branch_name in branches:
+        try:
+            branch = repository.get_branch(branch_name)
+            # allow_force_pushes defaults to False, which is the point of this
+            # call: students must not be able to rewrite the history they hand in.
+            if require_pull_requests:
+                branch.edit_protection(required_approving_review_count=0)
+            else:
+                branch.edit_protection()
+        except GithubException as error:
+            reason = (
+                "the branch does not exist in the new repository"
+                if error.status == 404
+                else str(explain_github_error(error, "protect branch", branch_name))
+            )
+            typer.secho(
+                f"Warning: {branch_name} of {repository.name} is NOT protected: "
+                f"{reason}.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            unprotected.append(branch_name)
+    return tuple(unprotected)
+
+
+def create_repositories(context: AssignmentContext, assume_yes: bool) -> TargetReport:
+    """Create a private repository per target and seed it from the source repository."""
+    settings = context.settings
+    source = require_source(settings)
+    default_branch = settings.config.default_branch
+    validate_protected_branches(settings.config.repos.protect_branches)
+
+    # Checking the source branch once, before the first repository exists, keeps
+    # a misconfigured default branch from leaving empty repositories behind.
+    if default_branch not in list_local_branches(source):
+        raise GitError(
+            f"The source repository {source} has no branch {default_branch!r}. "
+            "Name the right branch with --default-branch, or add a line such as "
+            "'default-branch: main' to your ghtt.yaml."
+        )
+
+    confirmer = Confirmer("create the repository", assume_yes, settings.dry_run)
+    protected = (default_branch, *settings.config.repos.protect_branches)
+
+    processed: list[str] = []
+    skipped: list[str] = []
+    failed: list[str] = []
+    for target in context.targets:
+        if context.existing(target) is not None:
+            typer.secho(
+                f"Repository {target.url} already exists; skipping. "
+                "ghtt never overwrites an existing repository.",
+                fg=typer.colors.YELLOW,
+            )
+            skipped.append(target.name)
+            continue
+
+        if not confirmer.should_proceed(target.url):
+            skipped.append(target.name)
+            continue
+
+        if settings.dry_run:
+            typer.echo(
+                f"would create private repository {target.url} from {source}, "
+                f"push branch {default_branch}, and protect "
+                f"{', '.join(protected)}"
+            )
+            skipped.append(target.name)
+            continue
+
+        typer.secho(f"Creating repository {target.url}", fg=typer.colors.GREEN)
+        try:
+            repository = context.organization.create_repo(
+                target.name,
+                private=True,
+                has_issues=settings.config.repos.has_issues,
+                has_wiki=settings.config.repos.has_wiki,
+                has_downloads=False,
+                has_projects=False,
+            )
+        except GithubException as error:
+            explained = explain_github_error(error, "create repository", target.name)
+            typer.secho(f"Warning: {explained}", fg=typer.colors.YELLOW, err=True)
+            failed.append(f"{target.name}: {explained}")
+            continue
+
+        try:
+            seed_repository(context, target, repository, source)
+        except GitError as error:
+            typer.secho(f"Warning: {error}", fg=typer.colors.YELLOW, err=True)
+            failed.append(f"{target.name}: {error}")
+            continue
+
+        try:
+            # One edit call carries both settings that depend on the pushed
+            # content, instead of the two round trips the legacy tool made.
+            repository.edit(
+                default_branch=default_branch, description=target.description
+            )
+        except GithubException as error:
+            explained = explain_github_error(error, "configure repository", target.name)
+            typer.secho(f"Warning: {explained}", fg=typer.colors.YELLOW, err=True)
+            failed.append(f"{target.name}: {explained}")
+            continue
+
+        typer.secho(
+            f"Protecting {', '.join(protected)} so students cannot rewrite history",
+            fg=typer.colors.GREEN,
+        )
+        unprotected = protect_branches(
+            repository, protected, settings.config.repos.require_pull_requests
+        )
+        if unprotected:
+            failed.append(f"{target.name}: could not protect {', '.join(unprotected)}")
+            continue
+
+        processed.append(target.name)
+
+    return TargetReport(
+        processed=tuple(processed), skipped=tuple(skipped), failed=tuple(failed)
+    )
+
+
+def seed_repository(
+    context: AssignmentContext,
+    target: RepositoryTarget,
+    repository: Repository,
+    source: Path,
+) -> None:
+    """Fill in the templates of a throwaway copy of the source and push it.
+
+    The rendering happens in a temporary clone so the teacher's own source
+    repository never gains a branch, a commit, or a rendered file.
+    """
+    settings = context.settings
+    default_branch = settings.config.default_branch
+    clone_url = clone_url_for(repository, settings.transport)
+
+    with tempfile.TemporaryDirectory(prefix="ghtt-") as directory:
+        workspace = Path(directory) / target.name
+        clone_branch(source, default_branch, workspace)
+        rendered = render_tree(workspace, target, clone_url)
+        if rendered:
+            typer.echo(f"Rendered {len(rendered)} template files")
+            commit_all(workspace, "fill in templates")
+        typer.secho(f"Pushing {default_branch} to {target.url}", fg=typer.colors.GREEN)
+        push_branch(
+            workspace,
+            clone_url,
+            "HEAD",
+            default_branch,
+            settings.transport,
+            settings.git_token,
+        )
+
 
 # ==============================================================================
 # delete-repos

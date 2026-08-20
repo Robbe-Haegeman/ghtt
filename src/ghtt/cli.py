@@ -25,8 +25,12 @@ from .config import config_schema
 from .defaults import DEFAULT_GITHUB_URL
 from .errors import GhttError
 from .git import GitTransport
+from .issues import create_issues
+from .pull import pull_repositories
+from .pull_requests import create_pull_requests
 from .report import TargetReport
 from .repositories import (
+    create_repositories,
     delete_repositories,
     rename_repositories,
     require_deletion_enabled,
@@ -392,48 +396,150 @@ def options_of(context: typer.Context, source: Path | None = None) -> CommonOpti
 
 
 # ==============================================================================
-# Assignment Commands
+# Repository And Content Commands
 # ==============================================================================
-#
-# TODO: these subcommands are rewritten in the following steps of this rewrite.
-# They are declared now so that the command tree, and therefore every help page,
-# already matches the interface the finished release must offer.
-
-
-def rewrite_in_progress(command: str) -> None:
-    """Prevent a partial command from being mistaken for a successful operation."""
-    typer.secho(
-        f"The {command} command is not implemented in this rewrite stage.",
-        fg=typer.colors.RED,
-        err=True,
-    )
-    raise typer.Exit(code=2)
 
 
 @assignment_app.command("create-repos")
-def create_repos() -> None:
-    """Create repositories from a source Git repository."""
-    rewrite_in_progress("create-repos")
+@reports_errors
+def create_repos(
+    context: typer.Context,
+    source: SourceOption = None,
+    students: StudentsFilterOption = None,
+    groups: GroupsFilterOption = None,
+    yes: YesOption = False,
+) -> None:
+    """Create a private repository per student or group from a source repository.
+
+    Each repository receives a copy of the source with its .jinja files rendered
+    for that student or group, and its default branch is protected so students
+    cannot rewrite history. An existing repository is never overwritten.
+
+    This does not give students access; see `ghtt assignment grant`.
+    """
+    settings = resolve_settings(options_of(context, source))
+    selection = TargetSelection(students=students, groups=groups, assume_yes=yes)
+    finish(create_repositories(prepare_assignment(settings, selection), yes))
 
 
 @assignment_app.command("create-pr")
-def create_pr() -> None:
-    """Push a branch and create pull requests."""
-    rewrite_in_progress("create-pr")
+@reports_errors
+def create_pr(
+    context: typer.Context,
+    branch: Annotated[
+        str,
+        typer.Option("--branch", help="Branch to create in the student repositories."),
+    ],
+    title: Annotated[str, typer.Option("--title", help="Title of the pull request.")],
+    body: Annotated[
+        str, typer.Option("--body", help="Body of the pull request (the message).")
+    ],
+    source: SourceOption = None,
+    branch_already_pushed: Annotated[
+        bool,
+        typer.Option(
+            "--branch-already-pushed",
+            "-B",
+            help="The branch is already pushed, so only open the pull requests.",
+        ),
+    ] = False,
+    per_repository: Annotated[
+        bool,
+        typer.Option(
+            "--per-repository",
+            help=(
+                "Render the source separately for each repository, so every "
+                "student or group receives its own content. Without this, the "
+                "same branch is pushed to every repository."
+            ),
+        ),
+    ] = False,
+    force_push: Annotated[
+        bool,
+        typer.Option(
+            "--force-push",
+            help="Overwrite the branch if it already exists with other history.",
+        ),
+    ] = False,
+    students: StudentsFilterOption = None,
+    groups: GroupsFilterOption = None,
+    yes: YesOption = False,
+) -> None:
+    """Push a branch to the student repositories and open a pull request in each.
+
+    The pull request is opened from --branch into the default branch. An open
+    pull request for the same branch pair is reused rather than duplicated:
+    pushing to its branch already updates it.
+    """
+    settings = resolve_settings(options_of(context, source))
+    selection = TargetSelection(students=students, groups=groups, assume_yes=yes)
+    finish(
+        create_pull_requests(
+            prepare_assignment(settings, selection),
+            branch,
+            title,
+            body,
+            branch_already_pushed,
+            per_repository,
+            force_push,
+            yes,
+        )
+    )
 
 
 @assignment_app.command("create-issues")
-def create_issues(
-    path: Annotated[Path, typer.Argument(help="YAML issue-and-milestone template.")],
+@reports_errors
+def create_issues_command(
+    context: typer.Context,
+    path: Annotated[
+        Path,
+        typer.Argument(
+            help=(
+                "YAML file describing the milestones and issues to create. It is "
+                "a list of entries, each with type: milestone or type: issue, and "
+                "it is rendered as a Jinja template for every repository. See "
+                "docs/examples/project-config/lab1-assignment.yaml."
+            )
+        ),
+    ],
+    students: StudentsFilterOption = None,
+    groups: GroupsFilterOption = None,
+    yes: YesOption = False,
 ) -> None:
-    """Create or update issues and milestones from PATH."""
-    rewrite_in_progress("create-issues")
+    """Create or update the milestones and issues described by PATH.
+
+    An entry that already exists with the same title is updated only when it
+    differs, so running this again after editing the template is safe.
+    """
+    settings = resolve_settings(options_of(context))
+    selection = TargetSelection(students=students, groups=groups, assume_yes=yes)
+    finish(create_issues(prepare_assignment(settings, selection), path, yes))
 
 
 @assignment_app.command()
-def pull() -> None:
-    """Fetch each target repository and report its latest commit."""
-    rewrite_in_progress("pull")
+@reports_errors
+def pull(
+    context: typer.Context,
+    source: SourceOption = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Replace a local branch that has diverged from the repository.",
+        ),
+    ] = False,
+    students: StudentsFilterOption = None,
+    groups: GroupsFilterOption = None,
+    yes: YesOption = False,
+) -> None:
+    """Fetch each student repository into a local branch and show its last commit.
+
+    Nothing is checked out, so your worktree and unrelated branches are left
+    alone. Use `ghtt util branches-to-folders` to unpack the branches afterwards.
+    """
+    settings = resolve_settings(options_of(context, source))
+    selection = TargetSelection(students=students, groups=groups, assume_yes=yes)
+    finish(pull_repositories(prepare_assignment(settings, selection), force, yes))
 
 
 # ==============================================================================
