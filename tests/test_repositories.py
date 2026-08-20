@@ -188,6 +188,23 @@ def test_rename_applies_the_replacement_to_matching_repositories(
     )
 
 
+def test_rename_announces_every_repository_as_it_goes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Answering `all` must not leave a long run looking like it has hung."""
+    run_rename(
+        monkeypatch,
+        ("studnt-ada", "studnt-bert", "studnt-cy"),
+        "studnt-(.*)",
+        r"student-\1",
+    )
+
+    printed = capsys.readouterr().out
+    for name in ("studnt-ada", "studnt-bert", "studnt-cy"):
+        assert f"Renaming {name} to student-" in printed
+    assert "Listing the repositories of course" in printed
+
+
 def test_rename_operates_on_the_whole_organization_not_the_student_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

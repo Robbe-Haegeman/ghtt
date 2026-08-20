@@ -111,6 +111,10 @@ def prepare_assignment(
 
     # Connecting last keeps every data error offline and instant, which is what
     # makes a mistyped filter cheap to discover.
+    typer.secho(
+        f"# Listing the repositories of {settings.connection.organization}..",
+        fg=typer.colors.GREEN,
+    )
     client = connect_github(settings.connection, settings.token)
     organization = load_organization(client, settings.connection.organization)
     repositories = load_repositories(organization)

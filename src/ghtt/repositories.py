@@ -326,6 +326,12 @@ def rename_repositories(
 
     client = connect_github(settings.connection, settings.token)
     organization = load_organization(client, settings.connection.organization)
+    # Listing a large organization takes a noticeable while, so say what is
+    # happening before waiting on it.
+    typer.secho(
+        f"# Listing the repositories of {settings.connection.organization}..",
+        fg=typer.colors.GREEN,
+    )
     repositories = load_repositories(organization)
 
     # Every rename is planned before any is applied, so a replacement that would
@@ -388,6 +394,9 @@ def rename_repositories(
             skipped.append(old_name)
             continue
 
+        # Every rename is one API round trip. Saying which one is in flight is
+        # what keeps a long run from looking like it has stopped responding.
+        typer.secho(f"Renaming {old_name} to {new_name}", fg=typer.colors.GREEN)
         try:
             repositories[old_name.lower()].edit(name=new_name)
         except GithubException as error:
