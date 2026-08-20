@@ -12,12 +12,21 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 CONFIG_FILENAME = "ghtt.yaml"
 
 
+# ==============================================================================
+# Config Shape
+# ==============================================================================
+#
+# These models deliberately mirror the documented legacy YAML names. Keeping the
+# aliases beside the typed fields makes the accepted file format easy to audit
+# and lets Pydantic generate the matching JSON Schema without a second format.
+
+
 class ConfigError(Exception):
     """A config file cannot safely supply command defaults."""
 
 
 class FieldMapping(BaseModel):
-    """Map roster CSV fields onto a person record."""
+    """Map student-list CSV fields onto a person record."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -27,8 +36,8 @@ class FieldMapping(BaseModel):
     groups: str | None = None
 
 
-class RosterConfig(BaseModel):
-    """Describe a student or mentor CSV file and its mapped fields."""
+class StudentListConfig(BaseModel):
+    """Describe a student or mentor list CSV file and its mapped fields."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -63,8 +72,8 @@ class Config(BaseModel):
         int, Field(alias="expected-mentors-per-group")
     ] = 0
     repos: RepositoryConfig = Field(default_factory=RepositoryConfig)
-    students: RosterConfig | None = None
-    mentors: RosterConfig | None = None
+    students: StudentListConfig | None = None
+    mentors: StudentListConfig | None = None
 
     @model_validator(mode="after")
     def reject_ambiguous_student_groups(self) -> Config:
@@ -80,6 +89,11 @@ class Config(BaseModel):
         return self
 
 
+# ==============================================================================
+# Config Loading
+# ==============================================================================
+
+
 def choose_value[T](command_line: T | None, config: T | None, built_in: T) -> T:
     """Apply the documented command-line, config, then built-in precedence."""
     if command_line is not None:
@@ -91,13 +105,14 @@ def choose_value[T](command_line: T | None, config: T | None, built_in: T) -> T:
 
 def load_config(
     config_path: Path | None,
-    *,
     current_directory: Path,
 ) -> Config:
     """Load the explicitly selected or local optional project config."""
     selected_path = config_path or current_directory / CONFIG_FILENAME
     explicit_selection = config_path is not None
 
+    # A local config is a convenience, not a requirement. An explicitly named
+    # config, however, is an intentional request and should never be ignored.
     if not selected_path.exists():
         if explicit_selection:
             raise ConfigError(f"Config file not found: {selected_path}")
@@ -105,13 +120,51 @@ def load_config(
     if not selected_path.is_file():
         raise ConfigError(f"Config path is not a file: {selected_path}")
 
-    raw_config = _read_yaml_mapping(selected_path)
+    # Parse YAML before constructing models so malformed YAML receives a
+    # file-specific error instead of a generic validation failure.
+    try:
+        with selected_path.open(encoding="utf-8") as file:
+            raw_config = yaml.safe_load(file)
+    except OSError as error:
+        raise ConfigError(
+            f"Cannot read config file {selected_path}: {error}"
+        ) from error
+    except yaml.YAMLError as error:
+        raise ConfigError(
+            f"Invalid YAML in config file {selected_path}: {error}"
+        ) from error
+
+    if raw_config is None:
+        raw_config = {}
+    if not isinstance(raw_config, dict):
+        raise ConfigError(f"Config file {selected_path} must contain a YAML mapping")
+
+    # Pydantic now checks the documented structure, including unknown keys.
     try:
         config = Config.model_validate(raw_config)
     except ValidationError as error:
         raise ConfigError(f"Invalid config in {selected_path}: {error}") from error
 
-    return _resolve_configured_paths(config, selected_path.parent)
+    # Relative paths describe project files, so they belong to the config file
+    # rather than whichever directory happened to run ghtt.
+    def resolve(path: Path) -> Path:
+        return path if path.is_absolute() else (selected_path.parent / path).resolve()
+
+    updates: dict[str, object] = {}
+    if config.source is not None:
+        updates["source"] = resolve(config.source)
+    for role in ("students", "mentors"):
+        student_list = getattr(config, role)
+        if student_list is not None:
+            updates[role] = student_list.model_copy(
+                update={"source": resolve(student_list.source)}
+            )
+    return config.model_copy(update=updates)
+
+
+# ==============================================================================
+# Schema Publication
+# ==============================================================================
 
 
 def config_schema() -> dict[str, Any]:
@@ -119,36 +172,3 @@ def config_schema() -> dict[str, Any]:
     schema = Config.model_json_schema(by_alias=True)
     schema["$id"] = f"https://github.com/idlab-discover/ghtt/schemas/{version('ghtt')}.json"
     return schema
-
-
-def _read_yaml_mapping(path: Path) -> dict[str, Any]:
-    try:
-        with path.open(encoding="utf-8") as file:
-            raw_value = yaml.safe_load(file)
-    except OSError as error:
-        raise ConfigError(f"Cannot read config file {path}: {error}") from error
-    except yaml.YAMLError as error:
-        raise ConfigError(f"Invalid YAML in config file {path}: {error}") from error
-
-    if raw_value is None:
-        return {}
-    if not isinstance(raw_value, dict):
-        raise ConfigError(f"Config file {path} must contain a YAML mapping")
-    return raw_value
-
-
-def _resolve_configured_paths(
-    config: Config,
-    base_directory: Path,
-) -> Config:
-    def resolve(path: Path) -> Path:
-        return path if path.is_absolute() else (base_directory / path).resolve()
-
-    changes: dict[str, object] = {}
-    if config.source is not None:
-        changes["source"] = resolve(config.source)
-    for name in ("students", "mentors"):
-        roster = getattr(config, name)
-        if roster is not None:
-            changes[name] = roster.model_copy(update={"source": resolve(roster.source)})
-    return config.model_copy(update=changes)

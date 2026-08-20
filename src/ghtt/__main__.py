@@ -15,6 +15,13 @@ import typer
 
 from .config import config_schema
 
+# ==============================================================================
+# Command Tree
+# ==============================================================================
+#
+# Constructing the tree must be side-effect free: Typer does this same work to
+# render help, and help is guaranteed not to read config or contact services.
+
 app = typer.Typer(
     help="Manage GitHub-based coursework and exams.",
     no_args_is_help=True,
@@ -41,6 +48,11 @@ ConfigPath = Annotated[
 ]
 
 
+# ==============================================================================
+# Commands
+# ==============================================================================
+
+
 def rewrite_in_progress(command: str) -> None:
     """Prevent partial commands from being mistaken for successful operations."""
     typer.echo(
@@ -53,6 +65,8 @@ def rewrite_in_progress(command: str) -> None:
 @app.callback()
 def cli(config: ConfigPath = None) -> None:
     """Run ghtt commands."""
+    # Command implementations load config only after they know they need it.
+    # Keeping the callback empty protects all nested ``--help`` pages.
 
 
 @app.command()
@@ -139,6 +153,11 @@ def branches_to_folders(
 app.add_typer(assignment_app, name="assignment")
 app.add_typer(config_app, name="config")
 app.add_typer(util_app, name="util")
+
+
+# ==============================================================================
+# Installed Entry Point
+# ==============================================================================
 
 
 def main() -> None:
