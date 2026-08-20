@@ -52,9 +52,10 @@ def answer(monkeypatch: pytest.MonkeyPatch, answers: list[str]) -> list[str]:
     """Answer each confirmation prompt in turn and record the questions asked."""
     asked: list[str] = []
 
-    def fake_prompt(text: str, **_: Any) -> str:
+    def fake_prompt(text: str, value_proc: Any = None, **_: Any) -> Any:
         asked.append(text)
-        return answers.pop(0)
+        reply = answers.pop(0)
+        return value_proc(reply) if value_proc else reply
 
     monkeypatch.setattr(typer, "prompt", fake_prompt)
     return asked
@@ -81,20 +82,17 @@ def test_delete_repos_never_offers_an_answer_for_all_repositories(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`--yes` and `all` must not exist here: a wrong answer destroys a course."""
-    captured: list[list[str]] = []
-
-    def fake_prompt(text: str, type: Any = None, **_: Any) -> str:
-        captured.append(list(type.choices))
-        return "n"
-
-    monkeypatch.setattr(typer, "prompt", fake_prompt)
+    asked = answer(monkeypatch, ["n"])
     context = make_context(
         (make_target("course-team-1"),), (FakeRepository("course-team-1"),)
     )
 
     delete_repositories(context)
 
-    assert captured == [["y", "n", "abort"]]
+    assert asked == [
+        "Do you want to permanently delete the repository and all its data at "
+        '"https://github.example.edu/course/course-team-1"? (y, n, abort)'
+    ]
 
 
 def test_delete_repos_stops_the_whole_run_on_abort(
