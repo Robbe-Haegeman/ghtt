@@ -19,13 +19,20 @@ from typing import Annotated
 
 import typer
 
+from .access import grant_access, remove_access
+from .assignment import TargetSelection, prepare_assignment
 from .config import config_schema
 from .defaults import DEFAULT_GITHUB_URL
 from .errors import GhttError
 from .git import GitTransport
 from .report import TargetReport
+from .repositories import (
+    delete_repositories,
+    rename_repositories,
+    require_deletion_enabled,
+)
 from .search import mailgun_settings, run_search
-from .settings import CommonOptions
+from .settings import CommonOptions, resolve_settings
 from .util import branches_to_folders, grep_in
 
 # ==============================================================================
@@ -429,28 +436,120 @@ def pull() -> None:
     rewrite_in_progress("pull")
 
 
+# ==============================================================================
+# Access Commands
+# ==============================================================================
+
+
 @assignment_app.command()
-def grant() -> None:
-    """Give students repository access."""
-    rewrite_in_progress("grant")
+@reports_errors
+def grant(
+    context: typer.Context,
+    read_only: Annotated[
+        bool,
+        typer.Option(
+            "--read-only",
+            help=(
+                "Give pull access instead of push access. Students can still "
+                "open and answer issues."
+            ),
+        ),
+    ] = False,
+    students: StudentsFilterOption = None,
+    groups: GroupsFilterOption = None,
+    yes: YesOption = False,
+) -> None:
+    """Grant each student the collaborator role on their own repository.
+
+    Students who already have access have their access level set again, so
+    --read-only downgrades existing push access to pull access.
+    """
+    settings = resolve_settings(options_of(context))
+    selection = TargetSelection(students=students, groups=groups, assume_yes=yes)
+    finish(grant_access(prepare_assignment(settings, selection), read_only, yes))
 
 
 @assignment_app.command("remove-grant")
-def remove_grant() -> None:
-    """Remove student access and pending invitations."""
-    rewrite_in_progress("remove-grant")
+@reports_errors
+def remove_grant(
+    context: typer.Context,
+    students: StudentsFilterOption = None,
+    groups: GroupsFilterOption = None,
+    yes: YesOption = False,
+) -> None:
+    """Remove students' access to their repository and cancel pending invitations.
+
+    To keep read-only access instead of removing access entirely, use
+    `ghtt assignment grant --read-only`.
+    """
+    settings = resolve_settings(options_of(context))
+    selection = TargetSelection(students=students, groups=groups, assume_yes=yes)
+    finish(remove_access(prepare_assignment(settings, selection), yes))
+
+
+# ==============================================================================
+# Destructive Commands
+# ==============================================================================
 
 
 @assignment_app.command("delete-repos")
-def delete_repos() -> None:
-    """Permanently delete target repositories after explicit safeguards."""
-    rewrite_in_progress("delete-repos")
+@reports_errors
+def delete_repos(
+    context: typer.Context,
+    destroy_data: Annotated[
+        bool,
+        typer.Option(
+            "--destroy-data",
+            help="Confirm that this command may irrecoverably destroy data.",
+        ),
+    ] = False,
+    students: StudentsFilterOption = None,
+    groups: GroupsFilterOption = None,
+) -> None:
+    """Permanently delete the selected repositories and all of their history.
+
+    This needs two opt-ins: --destroy-data on the command line and
+    --enable-repo-delete (or 'enable-repo-delete: true' in ghtt.yaml). Every
+    repository is confirmed separately and --yes is deliberately not accepted.
+
+    Consider `ghtt assignment rename-repo` instead: renaming keeps the data.
+    """
+    settings = resolve_settings(options_of(context))
+    require_deletion_enabled(settings, destroy_data)
+    selection = TargetSelection(students=students, groups=groups, assume_yes=False)
+    finish(delete_repositories(prepare_assignment(settings, selection)))
 
 
 @assignment_app.command("rename-repo")
-def rename_repo() -> None:
-    """Rename organization repositories selected by a regular expression."""
-    rewrite_in_progress("rename-repo")
+@reports_errors
+def rename_repo(
+    context: typer.Context,
+    match: Annotated[
+        str,
+        typer.Option(
+            "--match",
+            help='Regular expression matching repository names, e.g. "studnt-(.*)".',
+        ),
+    ],
+    replace: Annotated[
+        str,
+        typer.Option(
+            "--replace",
+            help=(
+                "New name. It may use \\1, \\2, ... to refer to the groups "
+                'captured by --match, e.g. "student-\\1".'
+            ),
+        ),
+    ],
+    yes: YesOption = False,
+) -> None:
+    """Rename organization repositories whose name matches a regular expression.
+
+    Unlike the other assignment commands this one works on every repository in
+    the organization, not only on those derived from the student list.
+    """
+    settings = resolve_settings(options_of(context))
+    finish(rename_repositories(settings, match, replace, yes))
 
 
 # ==============================================================================

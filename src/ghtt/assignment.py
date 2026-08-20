@@ -7,16 +7,18 @@ which of them already exist on GitHub. This module answers them once.
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import typer
 from github.Organization import Organization
 from github.Repository import Repository
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, SkipValidation
 from tabulate import tabulate
 
 from .config import ConfigError
 from .github import connect_github, load_organization, load_repositories
 from .prompt import Confirmer
-from .settings import CommonOptions, Settings, resolve_settings
+from .settings import Settings
 from .student_list import (
     Person,
     RepositoryTarget,
@@ -48,13 +50,14 @@ class TargetSelection(BaseModel):
 class AssignmentContext(BaseModel):
     """Everything an assignment command needs after preparation succeeds."""
 
-    # PyGithub objects are live API handles rather than validated values, so
-    # this model carries them without trying to describe their shape.
+    # PyGithub objects are live API handles rather than values to validate, so
+    # they are carried as-is. Skipping validation is what lets the test suite
+    # substitute a recording stand-in for the real API.
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     settings: Settings
-    organization: Organization
-    repositories: dict[str, Repository]
+    organization: Annotated[Organization, SkipValidation]
+    repositories: Annotated[dict[str, Repository], SkipValidation]
     targets: tuple[RepositoryTarget, ...]
 
     def existing(self, target: RepositoryTarget) -> Repository | None:
@@ -68,10 +71,13 @@ class AssignmentContext(BaseModel):
 
 
 def prepare_assignment(
-    options: CommonOptions, selection: TargetSelection
+    settings: Settings, selection: TargetSelection
 ) -> AssignmentContext:
-    """Resolve settings, derive the target plan, validate it, and show it."""
-    settings = resolve_settings(options)
+    """Derive the target plan from resolved settings, validate it, and show it.
+
+    Settings are resolved by the caller so that a command such as
+    ``delete-repos`` can check its own safeguards before anything is selected.
+    """
     if settings.config.students is None:
         raise ConfigError(
             "Missing student list. Supply --students-file and "

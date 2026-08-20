@@ -117,7 +117,7 @@ class FakeRepository:
 
     def remove_invitation(self, invite_id: int) -> None:
         self.request_count += 1
-        self.invitations = [i for i in self.invitations if i.invite_id != invite_id]
+        self.invitations = [i for i in self.invitations if i.id != invite_id]
 
     def create_milestone(
         self, title: str, description: Any = None, due_on: Any = None
@@ -152,13 +152,11 @@ class FakeRepository:
 
 
 class FakeInvitation:
-    def __init__(self, invitee: str, invite_id: int) -> None:
-        self.invitee = invitee
-        self.invite_id = invite_id
-        self.deleted = False
+    """A pending invitation. PyGithub exposes `id` and a NamedUser `invitee`."""
 
-    def delete(self) -> None:
-        self.deleted = True
+    def __init__(self, invitee: str, id: int) -> None:
+        self.invitee = FakeUser(invitee)
+        self.id = id
 
 
 class FakeMilestone:
