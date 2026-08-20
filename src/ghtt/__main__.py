@@ -1,16 +1,19 @@
 """The offline command shell for ghtt.
 
-Command callbacks intentionally do not load configuration or construct service
+Command callbacks intentionally do not load config or construct service
 clients. Typer invokes these callbacks to render help too, so side effects here
 would make the documented offline-help guarantee impossible to keep.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Annotated
 
 import typer
+
+from .config import config_schema
 
 app = typer.Typer(
     help="Manage GitHub-based coursework and exams.",
@@ -21,7 +24,7 @@ assignment_app = typer.Typer(
     no_args_is_help=True,
 )
 config_app = typer.Typer(
-    help="Inspect ghtt configuration support.",
+    help="Inspect ghtt config support.",
     no_args_is_help=True,
 )
 util_app = typer.Typer(
@@ -61,7 +64,7 @@ def search() -> None:
 @config_app.command()
 def schema() -> None:
     """Print the JSON Schema for this ghtt release."""
-    rewrite_in_progress("configuration schema")
+    typer.echo(json.dumps(config_schema(), indent=2, sort_keys=True))
 
 
 @assignment_app.command("create-repos")
@@ -138,5 +141,10 @@ app.add_typer(config_app, name="config")
 app.add_typer(util_app, name="util")
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Launch the Typer application from the installed console script."""
     app()
+
+
+if __name__ == "__main__":
+    main()

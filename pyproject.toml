@@ -47,7 +47,7 @@ dev = [
 Homepage = "http://packages.python.org/gh-teacher"
 
 [project.scripts]
-ghtt = "ghtt.__main__:cli"
+ghtt = "ghtt.__main__:main"
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers"

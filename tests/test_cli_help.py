@@ -1,4 +1,4 @@
-"""Help rendering must be safe before any configuration or service setup exists."""
+"""Help rendering must be safe before any config or service setup exists."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ runner = CliRunner()
         ["util", "branches-to-folders", "--help"],
     ],
 )
-def test_help_is_available_without_configuration(arguments: list[str]) -> None:
+def test_help_is_available_without_config(arguments: list[str]) -> None:
     result = runner.invoke(app, arguments)
 
     assert result.exit_code == 0, result.output
