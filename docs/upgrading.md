@@ -93,9 +93,11 @@ render as an empty string. It is now an error that names the template.
 - `ghtt config schema` to print the JSON Schema of `ghtt.yaml`.
 - `--protect-branch` and `repos.protect-branches` for branches to protect
   besides the default branch.
-- `create-pr --per-repository`, which renders the source separately for each
-  student or group so unique content can be handed out. See
-  [unique-content.md](unique-content.md).
+- `create-pr --content-dir DIR`, which writes just that directory's files into
+  each repository, rendered for that student or group, on a branch cut from the
+  repository's own default branch. Use it for per-student credentials or to
+  correct one file across a class without disturbing anything else. It needs no
+  access to the assignment template. See [unique-content.md](unique-content.md).
 - `create-pr --force-push` and `pull --force` for the cases that used to fail
   with a raw Git error.
 - `grep-in` and the other local utilities report missing, empty, and unreadable

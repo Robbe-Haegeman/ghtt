@@ -10,12 +10,18 @@ from github import GithubException
 from github.Repository import Repository
 
 from .assignment import AssignmentContext, require_source
-from .git import GitError, clone_branch, commit_all, list_local_branches, push_branch
+from .git import (
+    GitError,
+    clone_remote_branch,
+    commit_all,
+    list_local_branches,
+    push_branch,
+)
 from .github import clone_url_for, explain_github_error
 from .prompt import Confirmer
 from .report import TargetReport
 from .student_list import RepositoryTarget
-from .templates import render_tree
+from .templates import ContentChange, render_into
 
 # ==============================================================================
 # create-pr
@@ -28,39 +34,47 @@ def create_pull_requests(
     title: str,
     body: str,
     branch_already_pushed: bool,
-    per_repository: bool,
+    content_dir: Path | None,
     force_push: bool,
     assume_yes: bool,
 ) -> TargetReport:
-    """Open one pull request per target, from a shared or a per-repository branch.
+    """Open one pull request per target, from a shared branch or a content directory.
 
     The shared mode pushes the same source branch to every repository, which is
-    how a class-wide correction or a new assignment is handed out. The
-    per-repository mode renders the source separately for each target, which is
-    how unique content reaches a student without leaking another student's.
+    how a class-wide correction or a new assignment is handed out.
+
+    The content mode branches from each repository's own default branch and
+    writes only the files of a content directory into it, rendered for that
+    target. That is what keeps a hand-out from carrying anything else along, and
+    it needs no access to the source repository or its history.
     """
     settings = context.settings
     default_branch = settings.config.default_branch
 
+    if content_dir is not None and branch_already_pushed:
+        raise GitError(
+            "--content-dir pushes a branch to each repository separately, so it "
+            "cannot be combined with --branch-already-pushed."
+        )
+
+    # The content mode never reads the source repository, which is what lets a
+    # colleague hand something out without a copy of the assignment template.
     source: Path | None = None
-    if not branch_already_pushed:
+    if content_dir is None and not branch_already_pushed:
         source = require_source(settings)
         if default_branch not in list_local_branches(source):
             raise GitError(
                 f"The source repository {source} has no branch {default_branch!r}. "
                 "Name the right branch with --default-branch."
             )
-    if per_repository and branch_already_pushed:
-        raise GitError(
-            "--per-repository renders and pushes each repository separately, so "
-            "it cannot be combined with --branch-already-pushed."
-        )
 
     typer.secho(f"# Branch: '{branch}'", fg=typer.colors.GREEN)
     typer.secho(f"# Title: '{title}'", fg=typer.colors.GREEN)
     typer.secho(f"# Message: '{body}'", fg=typer.colors.GREEN)
     typer.secho(f"# Base branch: '{default_branch}'", fg=typer.colors.GREEN)
-    if branch_already_pushed:
+    if content_dir is not None:
+        typer.secho(f"# Content directory: '{content_dir}'", fg=typer.colors.GREEN)
+    elif branch_already_pushed:
         typer.secho("# The branch has been pushed already.", fg=typer.colors.GREEN)
     else:
         typer.secho(f"# Source directory: '{source}'", fg=typer.colors.GREEN)
@@ -85,7 +99,7 @@ def create_pull_requests(
             skipped.append(target.name)
             continue
 
-        if settings.dry_run:
+        if settings.dry_run and content_dir is None:
             if not branch_already_pushed:
                 typer.echo(f"would push {default_branch} to {target.name}:{branch}")
             typer.echo(
@@ -97,10 +111,20 @@ def create_pull_requests(
 
         clone_url = clone_url_for(repository, settings.transport)
         try:
-            if source is not None and per_repository:
-                push_rendered_source(
-                    context, target, source, clone_url, branch, force_push
+            if content_dir is not None:
+                changed = apply_content(
+                    context, target, clone_url, content_dir, branch, title, force_push
                 )
+                if changed is None:
+                    typer.secho(
+                        f"{target.name} already has this content; nothing to do.",
+                        fg=typer.colors.YELLOW,
+                    )
+                    skipped.append(target.name)
+                    continue
+                if settings.dry_run:
+                    skipped.append(target.name)
+                    continue
             elif source is not None:
                 typer.secho(
                     f"Pushing {default_branch} to {target.name}:{branch}",
@@ -143,7 +167,7 @@ def create_pull_requests(
         # Pushing to the branch of an existing pull request updates that pull
         # request, so the target was still acted on even though no new one was
         # opened. Only a run that did neither has nothing to report.
-        if opened or source is not None:
+        if opened or source is not None or content_dir is not None:
             processed.append(target.name)
         else:
             skipped.append(target.name)
@@ -153,30 +177,55 @@ def create_pull_requests(
     )
 
 
-def push_rendered_source(
+def apply_content(
     context: AssignmentContext,
     target: RepositoryTarget,
-    source: Path,
     clone_url: str,
+    content_dir: Path,
     branch: str,
+    title: str,
     force_push: bool,
-) -> None:
-    """Render the source for one target only and push it as that target's branch.
+) -> tuple[ContentChange, ...] | None:
+    """Write a content directory into one repository and push it as a branch.
 
-    Each target is rendered in its own temporary clone, so no student's data can
-    reach another student's repository and the source is left untouched.
+    The branch is cut from the repository's **own** default branch, so the pull
+    request contains exactly these files and nothing the student has since
+    changed elsewhere. Returns the files written, or ``None`` when the
+    repository already holds this content.
     """
     settings = context.settings
     with tempfile.TemporaryDirectory(prefix="ghtt-") as directory:
         workspace = Path(directory) / target.name
-        clone_branch(source, settings.config.default_branch, workspace)
-        rendered = render_tree(workspace, target, clone_url)
-        if rendered:
-            typer.echo(f"Rendered {len(rendered)} template files for {target.name}")
-        commit_all(workspace, f"Update assignment for {target.name}")
-        typer.secho(
-            f"Pushing rendered source to {target.name}:{branch}", fg=typer.colors.GREEN
+        clone_remote_branch(
+            clone_url,
+            settings.config.default_branch,
+            workspace,
+            settings.transport,
+            settings.git_token,
         )
+
+        changes = render_into(content_dir, workspace, target, clone_url)
+        typer.secho(f"Applying {content_dir} to {target.name}", fg=typer.colors.GREEN)
+        for change in changes:
+            # A replaced file may be one the student edited, so it is always
+            # named rather than folded into a count.
+            typer.secho(
+                f"  {change.describe()}",
+                fg=typer.colors.YELLOW if change.replaced else typer.colors.GREEN,
+            )
+
+        if settings.dry_run:
+            typer.echo(
+                f"would commit and open a pull request '{title}' on {target.name}"
+            )
+            return changes
+
+        # An identical hand-out leaves nothing to commit. Pushing an empty
+        # branch would only produce a pull request GitHub refuses to open.
+        if not commit_all(workspace, title):
+            return None
+
+        typer.secho(f"Pushing content to {target.name}:{branch}", fg=typer.colors.GREEN)
         push_branch(
             workspace,
             clone_url,
@@ -186,6 +235,7 @@ def push_rendered_source(
             settings.git_token,
             force=force_push,
         )
+    return changes
 
 
 def open_pull_request(

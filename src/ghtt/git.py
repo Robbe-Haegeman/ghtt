@@ -130,6 +130,27 @@ def clone_branch(source: Path, branch: str, destination: Path) -> None:
     )
 
 
+def clone_remote_branch(
+    remote_url: str,
+    branch: str,
+    destination: Path,
+    transport: GitTransport,
+    token: str | None,
+) -> None:
+    """Clone one branch of a remote repository into a new directory.
+
+    Only the requested branch is fetched, but its full history is: pushing from
+    a shallow clone is not reliable, and these clones exist to be pushed.
+    """
+    run_git(
+        ["clone", "--single-branch", "--branch", branch, remote_url, str(destination)],
+        # The destination does not exist yet, so Git runs from its parent.
+        destination.parent,
+        transport,
+        token,
+    )
+
+
 def commit_all(repository: Path, message: str) -> bool:
     """Commit every change in a working copy and report whether anything changed."""
     run_git(["add", "-A"], repository)

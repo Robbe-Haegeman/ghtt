@@ -467,17 +467,20 @@ def create_pr(
             help="The branch is already pushed, so only open the pull requests.",
         ),
     ] = False,
-    per_repository: Annotated[
-        bool,
+    content_dir: Annotated[
+        Path | None,
         typer.Option(
-            "--per-repository",
+            "--content-dir",
             help=(
-                "Render the source separately for each repository, so every "
-                "student or group receives its own content. Without this, the "
-                "same branch is pushed to every repository."
+                "Directory of files to write into each repository, rendered "
+                "separately for that student or group. Paths are kept relative "
+                "to it, so content/docs/task.md lands at docs/task.md and "
+                "replaces what is there. The branch is cut from each "
+                "repository's own default branch, so the pull request contains "
+                "these files and nothing else. Needs no --source."
             ),
         ),
-    ] = False,
+    ] = None,
     force_push: Annotated[
         bool,
         typer.Option(
@@ -490,6 +493,14 @@ def create_pr(
     yes: YesOption = False,
 ) -> None:
     """Push a branch to the student repositories and open a pull request in each.
+
+    Without --content-dir the same branch is pushed from --source to every
+    repository, which is how a class-wide update is handed out.
+
+    With --content-dir only the files of that directory are written into each
+    repository, rendered for that student or group. Use it to hand out
+    per-student credentials or to correct one file without touching anything
+    else the student has changed.
 
     The pull request is opened from --branch into the default branch. An open
     pull request for the same branch pair is reused rather than duplicated:
@@ -504,7 +515,7 @@ def create_pr(
             title,
             body,
             branch_already_pushed,
-            per_repository,
+            content_dir,
             force_push,
             yes,
         )

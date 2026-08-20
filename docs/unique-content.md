@@ -4,9 +4,10 @@ Most of what a class receives is identical: the same start code, the same
 assignment text. Sometimes it is not. Each student may need their own API key,
 their own database password, their own dataset, or their own exam variant.
 
-ghtt renders the source repository **separately for every target repository**,
-so a value that differs per student can be handed out without any student ever
-seeing another's.
+ghtt renders files **separately for every target repository**, so a value that
+differs per student can be handed out without any student ever seeing another's.
+The same mechanism corrects one file across a whole class without touching
+anything else the students have changed.
 
 ## Where the per-student values come from
 
@@ -25,8 +26,9 @@ own script, write them into the CSV, and let ghtt distribute them.
 
 ## Writing the template
 
-Any file in the source repository ending in `.jinja` is rendered per repository
-and the result replaces it without that suffix. A `credentials.env.jinja`:
+A file ending in `.jinja` is rendered per repository and the result replaces it
+without that suffix, whether it sits in the source repository or in a hand-out
+directory. A `credentials.env.jinja`:
 
 ```jinja
 API_KEY={{ students[0].record['API key'] }}
@@ -61,46 +63,69 @@ credentials are in the first commit:
 ghtt assignment create-repos
 ```
 
-**When the repositories already exist**, use the per-repository mode of
-`create-pr`. It renders the source once per target, pushes the result to a
-branch in that student's repository, and opens a pull request:
+**When the repositories already exist**, put the files you want to hand out in
+a directory of their own and pass it as `--content-dir`:
+
+```
+handouts/lab3-credentials/
+└── credentials.env.jinja
+```
 
 ```shell
-ghtt assignment create-pr --per-repository \
+ghtt assignment create-pr \
+  --content-dir handouts/lab3-credentials \
   --branch credentials \
   --title "Your credentials" \
   --body "This branch adds your personal credentials. Merge it to continue."
 ```
 
-Check the plan first with `--dry-run`, which shows the targets without pushing
-anything.
+For each selected repository ghtt clones **that repository's own default
+branch**, writes the content directory into it, commits, pushes the result to
+`--branch`, and opens a pull request. The pull request therefore contains
+exactly the files you handed out and nothing else.
 
-Without `--per-repository`, `create-pr` pushes the *same* branch to every
-repository, which is the right mode for a class-wide correction and the wrong
-one here: it would hand every student the same rendering.
+Check it first with `--dry-run`, which clones and reports which files each
+repository would gain or have replaced, without committing or pushing anything.
 
-`--per-repository` cannot be combined with `--branch-already-pushed`, because
-there is no single branch to have pushed in advance.
+### Paths are relative to the content directory
 
-## Rotating a value
-
-Each run renders and commits fresh on top of the source's default branch, so a
-second hand-out with different content has a history that has diverged from the
-first. The push is refused, and ghtt tells you so:
+The content directory mirrors the layout of the student repository, so this:
 
 ```
-Warning: could not push to course-ada: ...
-If the branch already exists with different history, rerun with --force-push to
-overwrite it.
+handouts/lab3-fix/
+├── credentials.env.jinja
+└── docs/
+    └── task.md
 ```
 
-Rerun with `--force-push` to replace the branch. The pull request that is
-already open picks up the new commit; ghtt does not open a second one.
+writes `credentials.env` and `docs/task.md`. That is also how you **correct a
+file that already exists**: put the fixed version at the same relative path and
+it replaces what is there. ghtt marks each file as it goes, so a replacement is
+never silent:
 
-```shell
-ghtt assignment create-pr --per-repository --force-push \
-  --branch credentials --title "Your credentials" --body "Updated credentials."
 ```
+Applying handouts/lab3-fix to course-ada
+  + credentials.env
+  ~ docs/task.md
+```
+
+`~` means the file already existed and was replaced; the pull request shows the
+replacement as an ordinary diff, so the student can review it before merging.
+
+A `.jinja` file is rendered for that student and loses the suffix. Any other
+file is copied byte for byte, so images and archives survive intact.
+
+### Why not just push the template repository
+
+Without `--content-dir`, `create-pr` pushes the same branch from `--source` to
+every repository, which is right for a class-wide update and wrong for a
+hand-out: the branch is the template's state, so merging it carries every other
+template file along and can conflict with work the student has already done.
+`--content-dir` avoids that by branching from the student's repository instead.
+
+It also means a hand-out needs **no access to the assignment template or its
+history**. A colleague with the content directory, the student list, and a token
+can run it.
 
 ## What happens when something is missing
 
@@ -124,9 +149,11 @@ every student's credentials. In the example project layout it sits next to
 ```
 my-course/
 ├── ghtt.yaml
-├── students.csv        <- all credentials, never pushed
-└── template/           <- pushed to every student repository
-    └── credentials.env.jinja
+├── students.csv                     <- all credentials, never pushed
+├── handouts/
+│   └── lab3-credentials/            <- only these files are handed out
+│       └── credentials.env.jinja
+└── template/                        <- pushed by create-repos
 ```
 
 The template itself is safe to commit: it contains placeholders, not values.

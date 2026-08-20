@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import jinja2
+from pydantic import BaseModel, ConfigDict
 
 from .defaults import TEMPLATE_SUFFIX
 from .errors import GhttError
@@ -44,6 +45,74 @@ def render_text(template_text: str, target: RepositoryTarget, clone_url: str) ->
         raise RenderError(
             f"Cannot render template for {target.name}: {error}"
         ) from error
+
+
+class ContentChange(BaseModel):
+    """One file a content directory writes into a repository."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    replaced: bool
+
+    def describe(self) -> str:
+        """Mark a replaced file differently from a new one, at a glance."""
+        return f"{'~' if self.replaced else '+'} {self.path}"
+
+
+def render_into(
+    content_dir: Path,
+    destination: Path,
+    target: RepositoryTarget,
+    clone_url: str,
+) -> tuple[ContentChange, ...]:
+    """Write every file of a content directory into a checked-out repository.
+
+    Paths are preserved relative to the content directory, so
+    ``content/docs/task.md`` lands at ``docs/task.md`` and replaces whatever was
+    there. A ``.jinja`` file is rendered for this target and loses that suffix;
+    anything else is copied byte for byte, so images and archives survive.
+    """
+    if not content_dir.is_dir():
+        raise RenderError(f"Content directory not found: {content_dir}")
+
+    changes: list[ContentChange] = []
+    for source_path in sorted(content_dir.rglob("*")):
+        if source_path.is_dir():
+            continue
+        relative = source_path.relative_to(content_dir)
+        # Git's own data is never course content, even inside a content
+        # directory that happens to sit in a repository.
+        if ".git" in relative.parts:
+            continue
+
+        if source_path.suffix == TEMPLATE_SUFFIX:
+            relative = relative.with_suffix("")
+            try:
+                template_text = source_path.read_text(encoding="utf-8")
+            except OSError as error:
+                raise RenderError(
+                    f"Cannot read template {source_path}: {error}"
+                ) from error
+            payload = render_text(template_text, target, clone_url).encode("utf-8")
+        else:
+            try:
+                payload = source_path.read_bytes()
+            except OSError as error:
+                raise RenderError(f"Cannot read {source_path}: {error}") from error
+
+        written = destination / relative
+        replaced = written.exists()
+        try:
+            written.parent.mkdir(parents=True, exist_ok=True)
+            written.write_bytes(payload)
+        except OSError as error:
+            raise RenderError(f"Cannot write {written}: {error}") from error
+        changes.append(ContentChange(path=str(relative), replaced=replaced))
+
+    if not changes:
+        raise RenderError(f"Content directory {content_dir} holds no files")
+    return tuple(changes)
 
 
 def render_tree(
