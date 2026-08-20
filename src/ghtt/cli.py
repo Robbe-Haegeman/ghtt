@@ -17,14 +17,16 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
+import requests
 import typer
+from github import GithubException
 
 from .access import grant_access, remove_access
 from .assignment import TargetSelection, prepare_assignment
 from .config import config_schema
-from .defaults import DEFAULT_GITHUB_URL
 from .errors import GhttError
 from .git import GitTransport
+from .github import explain_github_error
 from .issues import create_issues
 from .pull import pull_repositories
 from .pull_requests import create_pull_requests
@@ -36,7 +38,7 @@ from .repositories import (
     require_deletion_enabled,
 )
 from .search import mailgun_settings, run_search
-from .settings import CommonOptions, resolve_settings
+from .settings import CommonOptions, resolve_instance, resolve_settings
 from .util import branches_to_folders, grep_in
 
 # ==============================================================================
@@ -48,9 +50,8 @@ def reports_errors[**P, R](command: Callable[P, R]) -> Callable[P, R]:
     """Turn an expected ghtt failure into a readable message and a failing exit.
 
     Every command needs this, and a decorator keeps the twelve command bodies
-    free of an identical `try`/`except` block. Anything that is not a
-    :class:`GhttError` keeps its traceback: that means a bug, not a mistake the
-    user can correct.
+    free of an identical `try`/`except` block. Anything not caught here keeps
+    its traceback: that means a bug, not a mistake the user can correct.
     """
 
     @functools.wraps(command)
@@ -60,8 +61,30 @@ def reports_errors[**P, R](command: Callable[P, R]) -> Callable[P, R]:
         except GhttError as error:
             typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1) from error
+        except requests.RequestException as error:
+            # An unreachable instance is a wrong URL, a missing VPN, or an
+            # offline laptop far more often than it is a bug in ghtt.
+            typer.secho(
+                "Error: cannot reach GitHub. Check --url, your network "
+                "connection, and any VPN a GitHub Enterprise instance needs.\n"
+                f"  {type(error).__name__}: {first_line(error)}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=1) from error
+        except GithubException as error:
+            # A last resort for a call whose own handler did not expect this
+            # status: still a message about the request, never a traceback.
+            explained = explain_github_error(error, "complete a request to", "GitHub")
+            typer.secho(f"Error: {explained}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from error
 
     return wrapper
+
+
+def first_line(error: Exception) -> str:
+    """Keep the useful first line of a long, nested transport error."""
+    return str(error).strip().splitlines()[0] if str(error).strip() else "no detail"
 
 
 def finish(report: TargetReport) -> None:
@@ -687,6 +710,7 @@ def search(
     ],
     url: UrlOption = None,
     token: TokenOption = None,
+    config: ConfigPathOption = None,
     mg_api_key: Annotated[
         str | None, typer.Option("--mg-api-key", help="Mailgun API key.")
     ] = None,
@@ -711,9 +735,10 @@ def search(
       ghtt search -t TOKEN -q "Allkit.h in:path" --mg-api-key KEY
       --mg-domain mg.example.edu --to teacher@example.edu
     """
+    instance_url, instance_token = resolve_instance(url, token, config)
     run_search(
-        url or DEFAULT_GITHUB_URL,
-        token or "",
+        instance_url,
+        instance_token,
         query,
         mailgun_settings(mg_api_key, mg_domain, to),
     )

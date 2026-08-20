@@ -164,6 +164,22 @@ def merge_student_list(
     )
 
 
+def resolve_instance(
+    url: str | None, token: str | None, config_path: Path | None
+) -> tuple[str, str]:
+    """Resolve the GitHub instance and token for a command that needs no organization.
+
+    ``search`` spans all of GitHub, but it should still pick up the instance of
+    the project you are standing in, exactly as the rest of ghtt does.
+    """
+    file_config = load_config(config_path, Path.cwd())
+    if not token:
+        raise ConfigError(
+            "Missing GitHub token. Supply it with --token or set GHTT_TOKEN."
+        )
+    return choose_value(url, file_config.url, DEFAULT_GITHUB_URL), token
+
+
 def resolve_settings(options: CommonOptions) -> Settings:
     """Combine command-line values, an optional config file, and built-in defaults."""
     file_config = load_config(options.config_path, Path.cwd())

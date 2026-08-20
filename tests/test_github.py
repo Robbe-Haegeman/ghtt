@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
-from github import GithubException
+from github import Github, GithubException
+from github.Organization import Organization
+from github.Repository import Repository
 
 from ghtt.config import load_config
-from ghtt.github import GitHubError, explain_github_error, parse_github_url
+from ghtt.git import GitTransport
+from ghtt.github import (
+    GitHubError,
+    clone_url_for,
+    explain_github_error,
+    load_organization,
+    load_repositories,
+    parse_github_url,
+)
 
 
 def test_legacy_url_supplies_enterprise_api_endpoint_and_organization() -> None:
@@ -68,3 +80,43 @@ def test_github_errors_name_the_action_and_target(status: int, expected: str) ->
 
     assert "create repository course-org/ada" in str(translated)
     assert expected in str(translated)
+
+
+# ==============================================================================
+# Organization access
+# ==============================================================================
+
+
+def test_an_organization_the_token_cannot_see_names_the_action() -> None:
+    """Issue #17: an opaque 404 used to surface as a raw PyGithub exception."""
+
+    class RefusingClient:
+        def get_organization(self, login: str) -> object:
+            raise GithubException(404, "Not Found", {})
+
+    with pytest.raises(GitHubError, match="access organization course-org"):
+        load_organization(cast(Github, RefusingClient()), "course-org")
+
+
+def test_a_forbidden_repository_listing_names_the_permission() -> None:
+    class RefusingOrganization:
+        login = "course-org"
+
+        def get_repos(self, type: str = "all") -> object:
+            raise GithubException(403, "Forbidden", {})
+
+    with pytest.raises(GitHubError, match="permission denied") as error:
+        load_repositories(cast(Organization, RefusingOrganization()))
+
+    assert "list repositories in course-org" in str(error.value)
+
+
+def test_the_clone_url_follows_the_selected_transport() -> None:
+    class Repo:
+        clone_url = "https://github.example.edu/course/ada.git"
+        ssh_url = "git@github.example.edu:course/ada.git"
+
+    repository = cast(Repository, Repo())
+
+    assert clone_url_for(repository, GitTransport.HTTPS).startswith("https://")
+    assert clone_url_for(repository, GitTransport.SSH).startswith("git@")

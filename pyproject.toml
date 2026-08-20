@@ -50,8 +50,20 @@ Homepage = "http://packages.python.org/gh-teacher"
 ghtt = "ghtt.__main__:main"
 
 [tool.pytest.ini_options]
-addopts = "--strict-config --strict-markers"
+# Live tests need a disposable GitHub organization, so they never run by
+# default. Run them deliberately with `pytest -m live`.
+addopts = "--strict-config --strict-markers -m 'not live'"
 testpaths = ["tests"]
+markers = [
+  "live: runs against a real, disposable GitHub organization",
+]
+
+[tool.coverage.run]
+source = ["ghtt"]
+branch = true
+
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
 
 [tool.ruff]
 target-version = "py314"
