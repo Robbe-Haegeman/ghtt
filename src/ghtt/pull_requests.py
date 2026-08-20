@@ -140,7 +140,10 @@ def create_pull_requests(
             failed.append(f"{target.name}: {explained}")
             continue
 
-        if opened:
+        # Pushing to the branch of an existing pull request updates that pull
+        # request, so the target was still acted on even though no new one was
+        # opened. Only a run that did neither has nothing to report.
+        if opened or source is not None:
             processed.append(target.name)
         else:
             skipped.append(target.name)

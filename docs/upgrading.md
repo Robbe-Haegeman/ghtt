@@ -94,7 +94,8 @@ render as an empty string. It is now an error that names the template.
 - `--protect-branch` and `repos.protect-branches` for branches to protect
   besides the default branch.
 - `create-pr --per-repository`, which renders the source separately for each
-  student or group so unique content can be handed out.
+  student or group so unique content can be handed out. See
+  [unique-content.md](unique-content.md).
 - `create-pr --force-push` and `pull --force` for the cases that used to fail
   with a raw Git error.
 - `grep-in` and the other local utilities report missing, empty, and unreadable

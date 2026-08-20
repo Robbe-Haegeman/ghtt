@@ -67,7 +67,9 @@ file with `--config`, or skip the file entirely and pass every value on the
 command line.
 
 See [docs/configuration.md](docs/configuration.md) for every available setting,
-the template variables, and the issue template format.
+the template variables, and the issue template format, and
+[docs/unique-content.md](docs/unique-content.md) for giving each student their
+own credentials, dataset, or exam variant.
 
 ## Common workflow
 
@@ -141,7 +143,7 @@ offline: it never reads a config file, prompts, or contacts GitHub.
 | Command | Purpose |
 | --- | --- |
 | `create-repos` | Create a private repository per student or group from the source repository. |
-| `create-pr` | Push a branch to the student repositories and open a pull request in each. |
+| `create-pr` | Push a branch to the student repositories and open a pull request in each. `--per-repository` renders it separately per student; see [unique content](docs/unique-content.md). |
 | `create-issues PATH` | Create or update the milestones and issues described by a template. |
 | `pull` | Fetch each student repository into a local branch and show its last commit. |
 | `grant` | Give students push access, or pull access with `--read-only`. |

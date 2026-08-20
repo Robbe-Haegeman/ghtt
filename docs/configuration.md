@@ -162,6 +162,11 @@ These variables are available:
 An undefined variable is an error rather than an empty string, so a typo in a
 template is reported instead of quietly producing a broken file.
 
+`record` holds a student's whole row from the student list, keyed by the CSV
+column headers. That is how a value that differs per student, such as a personal
+API key, reaches only that student's repository. See
+[unique-content.md](unique-content.md) for that workflow.
+
 ## Issue templates
 
 `ghtt assignment create-issues PATH` takes a YAML file that is itself a Jinja
