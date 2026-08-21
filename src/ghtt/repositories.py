@@ -24,7 +24,14 @@ from .prompt import Confirmer
 from .report import TargetReport
 from .settings import Settings
 from .student_list import RepositoryTarget
-from .templates import render_tree
+from .templates import (
+    ContentPlan,
+    RenderError,
+    content_sources,
+    render_tree,
+    validate_content_plan,
+    write_content,
+)
 
 # ==============================================================================
 # create-repos
@@ -84,12 +91,20 @@ def protect_branches(
     return tuple(unprotected)
 
 
-def create_repositories(context: AssignmentContext, assume_yes: bool) -> TargetReport:
-    """Create a private repository per target and seed it from the source repository."""
+def create_repositories(
+    context: AssignmentContext, assume_yes: bool, content: ContentPlan
+) -> TargetReport:
+    """Create a private repository per target and seed it from the source repository.
+
+    A content plan adds the files that differ per student or group, such as a
+    credential or a dataset that is too large for the student list, to the first
+    commit of each repository.
+    """
     settings = context.settings
     source = require_source(settings)
     default_branch = settings.config.default_branch
     validate_protected_branches(settings.config.repos.protect_branches)
+    validate_content_plan(content)
 
     # Checking the source branch once, before the first repository exists, keeps
     # a misconfigured default branch from leaving empty repositories behind.
@@ -126,6 +141,21 @@ def create_repositories(context: AssignmentContext, assume_yes: bool) -> TargetR
                 f"push branch {default_branch}, and protect "
                 f"{', '.join(protected)}"
             )
+            # Resolving the content here is what makes a dry run a real
+            # rehearsal: a group whose own file is missing is named now,
+            # instead of halfway through creating a course.
+            if not content.is_empty:
+                try:
+                    for content_source in content_sources(content, target):
+                        typer.echo(f"  would add {content_source.destination}")
+                except RenderError as error:
+                    typer.secho(
+                        f"Warning: no content for {target.name}: {error}",
+                        fg=typer.colors.YELLOW,
+                        err=True,
+                    )
+                    failed.append(f"{target.name}: {error}")
+                    continue
             skipped.append(target.name)
             continue
 
@@ -146,8 +176,8 @@ def create_repositories(context: AssignmentContext, assume_yes: bool) -> TargetR
             continue
 
         try:
-            seed_repository(context, target, repository, source)
-        except GitError as error:
+            seed_repository(context, target, repository, source, content)
+        except (GitError, RenderError) as error:
             typer.secho(f"Warning: {error}", fg=typer.colors.YELLOW, err=True)
             failed.append(f"{target.name}: {error}")
             continue
@@ -187,11 +217,14 @@ def seed_repository(
     target: RepositoryTarget,
     repository: Repository,
     source: Path,
+    content: ContentPlan,
 ) -> None:
     """Fill in the templates of a throwaway copy of the source and push it.
 
     The rendering happens in a temporary clone so the teacher's own source
-    repository never gains a branch, a commit, or a rendered file.
+    repository never gains a branch, a commit, or a rendered file. Content that
+    belongs to this repository alone is added as its own commit, so it stays
+    recognizable in the history next to the assignment itself.
     """
     settings = context.settings
     default_branch = settings.config.default_branch
@@ -204,6 +237,19 @@ def seed_repository(
         if rendered:
             typer.echo(f"Rendered {len(rendered)} template files")
             commit_all(workspace, "fill in templates")
+
+        if not content.is_empty:
+            changes = write_content(content, workspace, target, clone_url)
+            typer.secho(f"Applying the content to {target.name}", fg=typer.colors.GREEN)
+            for change in changes:
+                # A replaced file is one the source repository also provides,
+                # so it is named rather than folded into a count.
+                typer.secho(
+                    f"  {change.describe()}",
+                    fg=typer.colors.YELLOW if change.replaced else typer.colors.GREEN,
+                )
+            commit_all(workspace, "add per-repository content")
+
         typer.secho(f"Pushing {default_branch} to {target.url}", fg=typer.colors.GREEN)
         push_branch(
             workspace,

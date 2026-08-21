@@ -9,6 +9,7 @@ import pytest
 from ghtt.config import Config
 from ghtt.errors import GhttError
 from ghtt.pull_requests import create_pull_requests
+from ghtt.templates import ContentFile, ContentPlan
 
 from .factories import make_context, make_settings, make_target
 from .fake_github import FakeRepository
@@ -77,7 +78,7 @@ def test_the_same_branch_is_pushed_to_every_repository(tmp_path: Path) -> None:
         title="Lab 2",
         body="Here is lab 2.",
         branch_already_pushed=False,
-        content_dir=None,
+        content=ContentPlan(),
         force_push=False,
         assume_yes=True,
     )
@@ -102,7 +103,7 @@ def test_branch_already_pushed_only_opens_the_pull_requests(tmp_path: Path) -> N
         title="Lab 2",
         body="Here is lab 2.",
         branch_already_pushed=True,
-        content_dir=None,
+        content=ContentPlan(),
         force_push=False,
         assume_yes=True,
     )
@@ -122,7 +123,7 @@ def test_an_open_pull_request_is_reused_instead_of_duplicated(tmp_path: Path) ->
         "title": "Lab 2",
         "body": "Here is lab 2.",
         "branch_already_pushed": True,
-        "content_dir": None,
+        "content": ContentPlan(),
         "force_push": False,
         "assume_yes": True,
     }
@@ -150,13 +151,17 @@ def content_dir_with(tmp_path: Path, files: dict[str, str]) -> Path:
     return root
 
 
-def hand_out(context, content_dir: Path, branch: str = "handout", **overrides):
+def hand_out(
+    context, content_dir: Path | None = None, branch: str = "handout", **overrides
+):
+    """Hand out one directory, or whatever plan an override supplies instead."""
+    directories = () if content_dir is None else (str(content_dir),)
     arguments = {
         "branch": branch,
         "title": "Hand-out",
         "body": "body",
         "branch_already_pushed": False,
-        "content_dir": content_dir,
+        "content": ContentPlan(directories=directories),
         "force_push": False,
         "assume_yes": True,
     }
@@ -381,7 +386,7 @@ def test_a_rejected_push_fails_only_its_own_repository(tmp_path: Path) -> None:
         title="Lab 2",
         body="Here is lab 2.",
         branch_already_pushed=False,
-        content_dir=None,
+        content=ContentPlan(),
         force_push=False,
         assume_yes=True,
     )
@@ -411,7 +416,7 @@ def test_a_missing_repository_is_reported_and_the_rest_continue(
         title="Lab 2",
         body="Here is lab 2.",
         branch_already_pushed=False,
-        content_dir=None,
+        content=ContentPlan(),
         force_push=False,
         assume_yes=True,
     )
@@ -432,7 +437,7 @@ def test_dry_run_pushes_nothing_and_opens_nothing(tmp_path: Path) -> None:
         title="Lab 2",
         body="Here is lab 2.",
         branch_already_pushed=False,
-        content_dir=None,
+        content=ContentPlan(),
         force_push=False,
         assume_yes=False,
     )
@@ -440,3 +445,140 @@ def test_dry_run_pushes_nothing_and_opens_nothing(tmp_path: Path) -> None:
     assert branches_of(Path(repository.clone_url)) == ["master"]
     assert repository.pulls == []
     assert report.skipped == ("course-ada",)
+
+
+# ==============================================================================
+# Per-repository content
+# ==============================================================================
+
+
+def group_context(
+    source: Path, repositories: tuple[FakeRepository, ...], groups: tuple[str, ...]
+):
+    """Group repositories, each expecting content of its own group."""
+    targets = tuple(
+        make_target(repository.name, students=("ada",), group=group)
+        for repository, group in zip(repositories, groups, strict=True)
+    )
+    return make_context(
+        targets,
+        repositories,
+        settings=make_settings(Config(source=source, default_branch="master")),
+    )
+
+
+def test_each_group_receives_only_its_own_directory(tmp_path: Path) -> None:
+    source = make_repository(tmp_path / "template")
+    repositories = tuple(
+        student_repository(tmp_path, name)
+        for name in ("course-team-1", "course-team-2")
+    )
+    for repository in repositories:
+        seed(source, repository)
+    context = group_context(source, repositories, ("team-1", "team-2"))
+    for group in ("team-1", "team-2"):
+        directory = tmp_path / "kubeconfigs" / group
+        directory.mkdir(parents=True)
+        (directory / ".kube").mkdir()
+        (directory / ".kube" / "config").write_text(f"cluster: {group}\n", "utf-8")
+
+    report = create_pull_requests(
+        context,
+        branch="kubeconfig",
+        title="Your cluster access",
+        body="Merge this to reach the cluster.",
+        branch_already_pushed=False,
+        content=ContentPlan(
+            directories=(str(tmp_path / "kubeconfigs" / "{student_group}"),)
+        ),
+        force_push=False,
+        assume_yes=True,
+    )
+
+    assert report.processed == ("course-team-1", "course-team-2")
+    for repository, group in zip(repositories, ("team-1", "team-2"), strict=True):
+        bare = Path(repository.clone_url)
+        assert (
+            file_in_branch(bare, "kubeconfig", ".kube/config") == f"cluster: {group}\n"
+        )
+
+
+def test_a_shared_directory_and_a_group_directory_are_layered(tmp_path: Path) -> None:
+    source = make_repository(tmp_path / "template")
+    repository = student_repository(tmp_path, "course-team-1")
+    seed(source, repository)
+    context = group_context(source, (repository,), ("team-1",))
+    shared = tmp_path / "common"
+    shared.mkdir()
+    (shared / "README.md").write_text("How to use the cluster.\n", "utf-8")
+    own = tmp_path / "team-1"
+    own.mkdir()
+    (own / "config").write_text("cluster: team-1\n", "utf-8")
+
+    report = hand_out(
+        context,
+        content=ContentPlan(
+            directories=(str(shared), str(tmp_path / "{student_group}"))
+        ),
+    )
+
+    assert report.processed == ("course-team-1",)
+    bare = Path(repository.clone_url)
+    assert file_in_branch(bare, "handout", "README.md") == "How to use the cluster.\n"
+    assert file_in_branch(bare, "handout", "config") == "cluster: team-1\n"
+
+
+def test_a_generated_file_is_renamed_into_place(tmp_path: Path) -> None:
+    """A flat directory of generated files needs no restructuring."""
+    source = make_repository(tmp_path / "template")
+    repository = student_repository(tmp_path, "course-team-1")
+    seed(source, repository)
+    context = group_context(source, (repository,), ("team-1",))
+    generated = tmp_path / "kubeconfigs"
+    generated.mkdir()
+    (generated / "team-1.yaml").write_text("cluster: team-1\n", "utf-8")
+
+    report = hand_out(
+        context,
+        content=ContentPlan(
+            files=(
+                ContentFile(
+                    source=str(generated / "{student_group}.yaml"),
+                    destination=".kube/config",
+                ),
+            )
+        ),
+    )
+
+    assert report.processed == ("course-team-1",)
+    bare = Path(repository.clone_url)
+    assert file_in_branch(bare, "handout", ".kube/config") == "cluster: team-1\n"
+
+
+def test_a_group_without_content_fails_alone(tmp_path: Path) -> None:
+    source = make_repository(tmp_path / "template")
+    repositories = tuple(
+        student_repository(tmp_path, name)
+        for name in ("course-team-1", "course-team-2")
+    )
+    for repository in repositories:
+        seed(source, repository)
+    context = group_context(source, repositories, ("team-1", "team-2"))
+    # Only the first group has a directory; the second was never generated.
+    directory = tmp_path / "kubeconfigs" / "team-1"
+    directory.mkdir(parents=True)
+    (directory / "config").write_text("cluster: team-1\n", "utf-8")
+
+    report = hand_out(
+        context,
+        content=ContentPlan(
+            directories=(str(tmp_path / "kubeconfigs" / "{student_group}"),)
+        ),
+    )
+
+    assert report.processed == ("course-team-1",)
+    assert len(report.failed) == 1
+    assert report.failed[0].startswith("course-team-2: Content directory not found")
+    # The repository that did have content is unaffected by the one that did not.
+    assert file_in_branch(Path(repositories[0].clone_url), "handout", "config")
+    assert branches_of(Path(repositories[1].clone_url)) == ["master"]

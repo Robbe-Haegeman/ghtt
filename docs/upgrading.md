@@ -98,6 +98,12 @@ render as an empty string. It is now an error that names the template.
   repository's own default branch. Use it for per-student credentials or to
   correct one file across a class without disturbing anything else. It needs no
   access to the assignment template. See [unique-content.md](unique-content.md).
+- `--content-dir` and `--content-file` on both `create-repos` and `create-pr`.
+  Both are repeatable and both accept `{organization}`, `{student_username}`,
+  and `{student_group}` in their paths, so a file generated per student or group
+  -- a KUBECONFIG, a certificate, a dataset -- reaches only the repository it
+  belongs to. `--content-file 'SOURCE=DESTINATION'` also renames it into place.
+  See [unique-content.md](unique-content.md#a-file-that-cannot-fit-in-the-student-list).
 - `create-pr --force-push` and `pull --force` for the cases that used to fail
   with a raw Git error.
 - `grep-in` and the other local utilities report missing, empty, and unreadable

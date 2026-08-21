@@ -23,6 +23,11 @@ TEMPLATE_SUFFIX = ".jinja"
 #: Directory suffix used by ``util branches-to-folders`` for its output.
 EXPANDED_DIRECTORY_SUFFIX = ".expanded"
 
+#: Separates the source from the destination of one ``--content-file`` mapping.
+#: The last one in the value splits it, so a generated source name may itself
+#: contain the separator.
+CONTENT_FILE_SEPARATOR = "="
+
 
 # ==============================================================================
 # GitHub

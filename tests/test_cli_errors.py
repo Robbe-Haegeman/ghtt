@@ -91,3 +91,50 @@ def test_a_missing_student_list_file_names_the_path(
     assert result.exit_code == 1
     assert "student list file not found" in result.output
     assert "students.csv" in result.output
+
+
+def test_a_malformed_content_file_mapping_shows_how_to_write_it(
+    project: Path,
+) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "assignment",
+            "--token",
+            "test-token",
+            "create-pr",
+            "--branch",
+            "kubeconfig",
+            "--title",
+            "Cluster access",
+            "--body",
+            "Merge this.",
+            "--content-file",
+            "kubeconfigs/team-1.yaml",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "SOURCE=DESTINATION" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_an_unknown_content_placeholder_is_refused_before_any_request(
+    project: Path,
+) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "assignment",
+            "--token",
+            "test-token",
+            "create-repos",
+            "--content-dir",
+            "handouts/{student_name}",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "student_name" in result.output
+    assert "{student_username}" in result.output
+    assert "Traceback" not in result.output

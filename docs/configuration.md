@@ -167,6 +167,29 @@ column headers. That is how a value that differs per student, such as a personal
 API key, reaches only that student's repository. See
 [unique-content.md](unique-content.md) for that workflow.
 
+## Content paths
+
+`create-repos` and `create-pr` accept `--content-dir` and `--content-file`, the
+files to write into each repository besides the source. Both options are
+repeatable, and both accept the placeholders of a repository name --
+`{organization}`, `{student_username}`, and `{student_group}` -- in their paths,
+so each student or group can be handed a file that only they receive:
+
+```shell
+ghtt assignment create-pr \
+  --content-dir handouts/lab3/common \
+  --content-dir 'handouts/lab3/{student_group}' \
+  --content-file 'kubeconfigs/{student_group}.yaml=.kube/config' \
+  --branch kubeconfig --title "Your cluster access" --body "Merge this."
+```
+
+Directories are applied in the order given and mapped files after all of them,
+so a later entry replaces a file an earlier one wrote. An unknown placeholder,
+a `--content-file` without both halves, and a destination that would leave the
+repository are all refused before anything is created. These options are
+command-line only; they describe one hand-out rather than a course-wide default.
+See [unique-content.md](unique-content.md#a-file-that-cannot-fit-in-the-student-list).
+
 ## Issue templates
 
 `ghtt assignment create-issues PATH` takes a YAML file that is itself a Jinja

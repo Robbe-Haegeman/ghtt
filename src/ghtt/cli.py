@@ -39,6 +39,7 @@ from .repositories import (
 )
 from .search import mailgun_settings, run_search
 from .settings import CommonOptions, resolve_instance, resolve_settings
+from .templates import build_content_plan
 from .util import branches_to_folders, grep_in
 
 # ==============================================================================
@@ -172,6 +173,34 @@ YesOption = Annotated[
     typer.Option(
         "--yes",
         help="Process all selected repositories without asking for each one.",
+    ),
+]
+# Both content options accept the placeholders of a repository name, which is
+# what lets one command hand every student or group a file of their own.
+ContentDirOption = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--content-dir",
+        help=(
+            "Directory of files to write into each repository, keeping the "
+            "paths relative to it, so content/docs/task.md lands at "
+            "docs/task.md. Repeatable: a later directory replaces a file an "
+            "earlier one wrote. May contain {organization}, {student_username}, "
+            "and {student_group}, as in handouts/lab3/{student_group}, to give "
+            "each student or group files only they receive."
+        ),
+    ),
+]
+ContentFileOption = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--content-file",
+        help=(
+            "One file to write into each repository, as SOURCE=DESTINATION, for "
+            "example 'kubeconfigs/{student_group}.yaml=.kube/config'. Both "
+            "halves accept the same placeholders as --content-dir. Repeatable, "
+            "and applied after every --content-dir."
+        ),
     ),
 ]
 
@@ -429,6 +458,8 @@ def options_of(context: typer.Context, source: Path | None = None) -> CommonOpti
 def create_repos(
     context: typer.Context,
     source: SourceOption = None,
+    content_dir: ContentDirOption = None,
+    content_file: ContentFileOption = None,
     students: StudentsFilterOption = None,
     groups: GroupsFilterOption = None,
     yes: YesOption = False,
@@ -439,11 +470,16 @@ def create_repos(
     for that student or group, and its default branch is protected so students
     cannot rewrite history. An existing repository is never overwritten.
 
+    --content-dir and --content-file add files that live outside the source
+    repository, such as a credential or a dataset generated per group. They are
+    committed on top of the source, so they are there from the first day.
+
     This does not give students access; see `ghtt assignment grant`.
     """
     settings = resolve_settings(options_of(context, source))
     selection = TargetSelection(students=students, groups=groups, assume_yes=yes)
-    finish(create_repositories(prepare_assignment(settings, selection), yes))
+    content = build_content_plan(content_dir, content_file)
+    finish(create_repositories(prepare_assignment(settings, selection), yes, content))
 
 
 @assignment_app.command("create-pr")
@@ -467,20 +503,8 @@ def create_pr(
             help="The branch is already pushed, so only open the pull requests.",
         ),
     ] = False,
-    content_dir: Annotated[
-        Path | None,
-        typer.Option(
-            "--content-dir",
-            help=(
-                "Directory of files to write into each repository, rendered "
-                "separately for that student or group. Paths are kept relative "
-                "to it, so content/docs/task.md lands at docs/task.md and "
-                "replaces what is there. The branch is cut from each "
-                "repository's own default branch, so the pull request contains "
-                "these files and nothing else. Needs no --source."
-            ),
-        ),
-    ] = None,
+    content_dir: ContentDirOption = None,
+    content_file: ContentFileOption = None,
     force_push: Annotated[
         bool,
         typer.Option(
@@ -494,13 +518,14 @@ def create_pr(
 ) -> None:
     """Push a branch to the student repositories and open a pull request in each.
 
-    Without --content-dir the same branch is pushed from --source to every
-    repository, which is how a class-wide update is handed out.
+    Without --content-dir and --content-file the same branch is pushed from
+    --source to every repository, which is how a class-wide update is handed out.
 
-    With --content-dir only the files of that directory are written into each
-    repository, rendered for that student or group. Use it to hand out
-    per-student credentials or to correct one file without touching anything
-    else the student has changed.
+    With them, only those files are written into each repository, resolved and
+    rendered for that student or group, on a branch cut from the repository's
+    own default branch. Use it to hand out per-student credentials, a file only
+    one group may have, or a correction to one file without touching anything
+    else the student has changed. This mode needs no --source.
 
     The pull request is opened from --branch into the default branch. An open
     pull request for the same branch pair is reused rather than duplicated:
@@ -508,6 +533,7 @@ def create_pr(
     """
     settings = resolve_settings(options_of(context, source))
     selection = TargetSelection(students=students, groups=groups, assume_yes=yes)
+    content = build_content_plan(content_dir, content_file)
     finish(
         create_pull_requests(
             prepare_assignment(settings, selection),
@@ -515,7 +541,7 @@ def create_pr(
             title,
             body,
             branch_already_pushed,
-            content_dir,
+            content,
             force_push,
             yes,
         )

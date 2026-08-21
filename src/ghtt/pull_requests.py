@@ -21,7 +21,13 @@ from .github import clone_url_for, explain_github_error
 from .prompt import Confirmer
 from .report import TargetReport
 from .student_list import RepositoryTarget
-from .templates import ContentChange, render_into
+from .templates import (
+    ContentChange,
+    ContentPlan,
+    RenderError,
+    validate_content_plan,
+    write_content,
+)
 
 # ==============================================================================
 # create-pr
@@ -34,33 +40,38 @@ def create_pull_requests(
     title: str,
     body: str,
     branch_already_pushed: bool,
-    content_dir: Path | None,
+    content: ContentPlan,
     force_push: bool,
     assume_yes: bool,
 ) -> TargetReport:
-    """Open one pull request per target, from a shared branch or a content directory.
+    """Open one pull request per target, from a shared branch or a content plan.
 
     The shared mode pushes the same source branch to every repository, which is
     how a class-wide correction or a new assignment is handed out.
 
     The content mode branches from each repository's own default branch and
-    writes only the files of a content directory into it, rendered for that
-    target. That is what keeps a hand-out from carrying anything else along, and
-    it needs no access to the source repository or its history.
+    writes only the files of the content plan into it, resolved and rendered for
+    that target. That is what keeps a hand-out from carrying anything else along,
+    and it needs no access to the source repository or its history.
     """
     settings = context.settings
     default_branch = settings.config.default_branch
 
-    if content_dir is not None and branch_already_pushed:
+    if not content.is_empty and branch_already_pushed:
         raise GitError(
-            "--content-dir pushes a branch to each repository separately, so it "
-            "cannot be combined with --branch-already-pushed."
+            "--content-dir and --content-file push a branch to each repository "
+            "separately, so they cannot be combined with --branch-already-pushed."
         )
+
+    # Whatever is the same for every repository is checked once, while nothing
+    # has been pushed yet, so a mistyped hand-out path is not rediscovered per
+    # student.
+    validate_content_plan(content)
 
     # The content mode never reads the source repository, which is what lets a
     # colleague hand something out without a copy of the assignment template.
     source: Path | None = None
-    if content_dir is None and not branch_already_pushed:
+    if content.is_empty and not branch_already_pushed:
         source = require_source(settings)
         if default_branch not in list_local_branches(source):
             raise GitError(
@@ -72,8 +83,9 @@ def create_pull_requests(
     typer.secho(f"# Title: '{title}'", fg=typer.colors.GREEN)
     typer.secho(f"# Message: '{body}'", fg=typer.colors.GREEN)
     typer.secho(f"# Base branch: '{default_branch}'", fg=typer.colors.GREEN)
-    if content_dir is not None:
-        typer.secho(f"# Content directory: '{content_dir}'", fg=typer.colors.GREEN)
+    if not content.is_empty:
+        for described in content.describe():
+            typer.secho(f"# Content: {described}", fg=typer.colors.GREEN)
     elif branch_already_pushed:
         typer.secho("# The branch has been pushed already.", fg=typer.colors.GREEN)
     else:
@@ -99,7 +111,7 @@ def create_pull_requests(
             skipped.append(target.name)
             continue
 
-        if settings.dry_run and content_dir is None:
+        if settings.dry_run and content.is_empty:
             if not branch_already_pushed:
                 typer.echo(f"would push {default_branch} to {target.name}:{branch}")
             typer.echo(
@@ -111,9 +123,9 @@ def create_pull_requests(
 
         clone_url = clone_url_for(repository, settings.transport)
         try:
-            if content_dir is not None:
+            if not content.is_empty:
                 changed = apply_content(
-                    context, target, clone_url, content_dir, branch, title, force_push
+                    context, target, clone_url, content, branch, title, force_push
                 )
                 if changed is None:
                     typer.secho(
@@ -139,6 +151,16 @@ def create_pull_requests(
                     settings.git_token,
                     force=force_push,
                 )
+        except RenderError as error:
+            # The plan itself is sound, so this is one target's own file that is
+            # missing or unreadable: the other repositories still get theirs.
+            typer.secho(
+                f"Warning: no content for {target.name}: {error}",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            failed.append(f"{target.name}: {error}")
+            continue
         except GitError as error:
             # A rejected push is nearly always a branch that moved on remotely,
             # so say what to do rather than only repeating Git's own wording.
@@ -167,7 +189,7 @@ def create_pull_requests(
         # Pushing to the branch of an existing pull request updates that pull
         # request, so the target was still acted on even though no new one was
         # opened. Only a run that did neither has nothing to report.
-        if opened or source is not None or content_dir is not None:
+        if opened or source is not None or not content.is_empty:
             processed.append(target.name)
         else:
             skipped.append(target.name)
@@ -181,12 +203,12 @@ def apply_content(
     context: AssignmentContext,
     target: RepositoryTarget,
     clone_url: str,
-    content_dir: Path,
+    content: ContentPlan,
     branch: str,
     title: str,
     force_push: bool,
 ) -> tuple[ContentChange, ...] | None:
-    """Write a content directory into one repository and push it as a branch.
+    """Write the content of a plan into one repository and push it as a branch.
 
     The branch is cut from the repository's **own** default branch, so the pull
     request contains exactly these files and nothing the student has since
@@ -204,8 +226,8 @@ def apply_content(
             settings.git_token,
         )
 
-        changes = render_into(content_dir, workspace, target, clone_url)
-        typer.secho(f"Applying {content_dir} to {target.name}", fg=typer.colors.GREEN)
+        changes = write_content(content, workspace, target, clone_url)
+        typer.secho(f"Applying the content to {target.name}", fg=typer.colors.GREEN)
         for change in changes:
             # A replaced file may be one the student edited, so it is always
             # named rather than folded into a count.
